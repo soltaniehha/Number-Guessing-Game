@@ -31,8 +31,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .aircraft import Aircraft, Door, Seat, get_aircraft
 from .config import (
-    BODY_DEPTH, DESIRED_HEADWAY, MAX_SIM_SECONDS, MIN_SPEED_FRACTION,
-    QUEUED, SEATED, SHUFFLING, STOWING, WALKING,
+    BODY_DEPTH, DESIRED_HEADWAY, DOOR_STREAM_BASE, MAX_SIM_SECONDS,
+    MIN_SPEED_FRACTION, ORDER_STREAM, PAX_STREAM, QUEUED, SEATED,
+    SERVICE_PHASE_BIN, SERVICE_PHASE_SHUFFLE, SERVICE_PHASE_STOW,
+    SERVICE_STREAM_BASE, SERVICE_STREAM_STRIDE, SHUFFLING, STOWING, WALKING,
     ConfigError, SimConfig, ticks_for,
 )
 from .metrics import PassengerRecord, RunResult, percentile
@@ -214,6 +216,11 @@ def _finite(v: float) -> float:
 class _DoorState:
     """One door's jetbridge queue.
 
+    Each door owns its own PCG32 stream, advanced once per release. The k-th
+    person to walk through a given door therefore waits the same drawn gap no
+    matter which strategy put them there, which is what makes the door arrival
+    process cancel exactly in a paired comparison (ENGINE_SPEC 1.3).
+
     `arrival_tick` is when the CURRENT head of the queue reaches the door, and it
     advances by one exponential draw per release regardless of whether the aisle
     let that passenger in. That distinction matters more than it looks: the door
@@ -224,13 +231,14 @@ class _DoorState:
     calibration error in the first cut of this engine.
     """
 
-    __slots__ = ("door", "queue", "cursor", "arrival_tick")
+    __slots__ = ("door", "queue", "cursor", "arrival_tick", "rng")
 
-    def __init__(self, door: Door):
+    def __init__(self, door: Door, seed: int, index: int):
         self.door = door
         self.queue: List[int] = []
         self.cursor = 0
         self.arrival_tick = 0
+        self.rng = PCG32(seed, DOOR_STREAM_BASE + index)
 
 
 def run(
@@ -250,9 +258,8 @@ def run(
     doors = ac.resolve_doors(cfg.doors)
     open_seating = cfg.strategy == OPEN_SEATING
 
-    rng_pax = PCG32(cfg.seed, 1)
-    rng_order = PCG32(cfg.seed, 2)
-    rng_sim = PCG32(cfg.seed, 3)
+    rng_pax = PCG32(cfg.seed, PAX_STREAM)
+    rng_order = PCG32(cfg.seed, ORDER_STREAM)
 
     pax = generate(rng_pax, ac, cfg)
     queue = build_order(pax, ac, cfg, rng_order) if pax else []
@@ -298,6 +305,7 @@ def run(
     pblockid = [0] * n
     pbinrun = [0] * n
     pparty = [0] * n
+    ppaxid = [0] * n
     pseat: List[Optional[Seat]] = [None] * n
 
     for p in queue:
@@ -306,6 +314,10 @@ def run(
         pmult[i] = p.stowMultiplier
         pspeed[i] = p.walkSpeed
         pparty[i] = p.partyId
+        # The PASSENGER id, not the boarding index: it is assigned in canonical
+        # seat order off the `pax` stream and is therefore the same person under
+        # every strategy. Keying the service streams on it is the whole point.
+        ppaxid[i] = p.id
         if not open_seating:
             s = p.seat
             pseat[i] = s
@@ -324,7 +336,7 @@ def run(
     lane_walk: List[List[int]] = [[] for _ in range(n_lanes)]
 
     # ---- doors ------------------------------------------------------------
-    door_states = [_DoorState(d) for d in doors]
+    door_states = [_DoorState(d, cfg.seed, i) for i, d in enumerate(doors)]
     door_by_id = {ds.door.id: ds for ds in door_states}
     for p in queue:
         door_by_id[p.doorId].queue.append(p.boardingIndex)
@@ -355,11 +367,32 @@ def run(
 
     wake: Dict[int, List[int]] = {}
 
+    # ---- per-passenger service streams (ENGINE_SPEC 1.3) ------------------
+    # One PCG32 per passenger per service phase, keyed on the passenger id.
+    # Built lazily: a passenger with no bags never needs a stow stream, and most
+    # passengers never need a bin-search one.
+    #
+    # Phases are SEPARATE streams rather than a single per-passenger sequence
+    # because two of them consume a number of draws that legitimately depends on
+    # the boarding order -- how many bin searches you make depends on who filled
+    # the bin, how many shuffle movements you make depends on who is already
+    # sitting there. Sharing one stream would let that variable count shift
+    # every later draw and reintroduce exactly the order dependence this is here
+    # to remove.
+    seed = cfg.seed
+    stow_streams: List[Optional[PCG32]] = [None] * n
+    bin_streams: List[Optional[PCG32]] = [None] * n
+    shuffle_streams: List[Optional[PCG32]] = [None] * n
+
+    def service_rng(cache: List[Optional[PCG32]], pid: int, phase: int) -> PCG32:
+        r = cache[pid]
+        if r is None:
+            r = PCG32(seed, SERVICE_STREAM_BASE
+                      + ppaxid[pid] * SERVICE_STREAM_STRIDE + phase)
+            cache[pid] = r
+        return r
+
     # ---- local bindings for the hot loop ----------------------------------
-    weibull = rng_sim.weibull
-    triangular = rng_sim.triangular
-    exponential = rng_sim.exponential
-    bernoulli = rng_sim.bernoulli
     w_shape, w_scale = cfg.stowWeibullShape, cfg.stowWeibullScale
     t_lo, t_mode, t_hi = cfg.shuffleMoveMin, cfg.shuffleMoveMode, cfg.shuffleMoveMax
     mv = cfg.shuffleMovements
@@ -435,19 +468,22 @@ def run(
             return False
         return True
 
-    def stow_penalty(slot: int, run: int, bags: int) -> float:
+    def stow_penalty(pid: int, slot: int, run: int, bags: int) -> float:
         """Place `bags` in the overhead bins, returning the seconds of extra
         faff. Searching outward and gate-checking are extrapolation, not
         literature -- no published boarding paper puts a number on them."""
         nonlocal bin_searches, gate_checks
         penalty = 0.0
         caps = row_caps[slot]
+        rng_bin = None
         for _ in range(bags):
             if run < len(caps) and bin_used[slot][run] < caps[run]:
                 bin_used[slot][run] += 1
                 continue
             bin_searches += 1
-            first = 1 if bernoulli(0.5) else -1
+            if rng_bin is None:
+                rng_bin = service_rng(bin_streams, pid, SERVICE_PHASE_BIN)
+            first = 1 if rng_bin.bernoulli(0.5) else -1
             placed = False
             for d in range(1, bin_radius + 1):
                 for sgn in (first, -first):
@@ -521,8 +557,10 @@ def run(
                 else:
                     inter_two += 1
         dur = 0.0
-        for _ in range(moves):
-            dur += triangular(t_lo, t_mode, t_hi)
+        if moves:
+            rng_shuf = service_rng(shuffle_streams, pid, SERVICE_PHASE_SHUFFLE)
+            for _ in range(moves):
+                dur += rng_shuf.triangular(t_lo, t_mode, t_hi)
         dur *= pmult[pid]
         pshuf[pid] = dur
         if dur > 0.0:
@@ -553,14 +591,29 @@ def run(
             return
         slot, run = prow[pid], pbinrun[pid]
         caps = row_caps[slot]
-        cap = caps[run] if run < len(caps) else 0
+        if run >= len(caps):
+            # The seat says it stows under bin run `run`, and that run does not
+            # exist above its own row. That is a broken geometry, not a full
+            # bin: treating it as one (the old `else 1.0`) silently charged the
+            # passenger the maximum bin-congestion penalty and hid the fault.
+            seat = pseat[pid]
+            raise ConfigError(
+                f"{ac.id}: seat {seat.id if seat else '?'} at row slot {slot} "
+                f"declares binRun {run}, but that row has only {len(caps)} bin "
+                f"run(s). The seat map and the per-row bin capacities disagree."
+            )
+        cap = caps[run]
+        # cap == 0 is a different thing entirely and IS legitimate: a bin run
+        # declared with zero capacity (binBagsPerRowSide = 0) is full because it
+        # never had room, so maximum congestion is the right answer there.
         fill = (bin_used[slot][run] / cap) if cap > 0 else 1.0
         base = 0.0
+        rng_stow = service_rng(stow_streams, pid, SERVICE_PHASE_STOW)
         for _ in range(bags):
-            base += weibull(w_shape, w_scale)
+            base += rng_stow.weibull(w_shape, w_scale)
         dur = base * pmult[pid] * (1.0 + bin_weight * fill * fill)
         before = gate_checks
-        dur += stow_penalty(slot, run, bags)
+        dur += stow_penalty(pid, slot, run, bags)
         pgatechecked[pid] = gate_checks - before
         pstow[pid] = dur
         if dur > 0.0:
@@ -606,7 +659,7 @@ def run(
             ds.cursor += 1
             # Cumulative, NOT `tick + ...`: the jetbridge queue keeps filling
             # while the aisle is blocked, so a backlog discharges at once.
-            ds.arrival_tick += ticks_for(exponential(door_mean), dt)
+            ds.arrival_tick += ticks_for(ds.rng.exponential(door_mean), dt)
             if abs(ptarget[pid] - px[pid]) < 1e-9:
                 lane_walk[lane].remove(pid)
                 arrive(pid, t, tick)
@@ -766,9 +819,18 @@ def run(
             if pstate[pid] != SEATED:
                 psit[pid] = total
 
-    # final sample so the curves close on the true end time
+    # final sample so the curves close on the true end time.
+    #
+    # The aisle count is the REAL lane occupancy, not `n - seated_count`. On a
+    # run that hit MAX_SIM_SECONDS the difference is everybody still waiting on
+    # the jetbridge -- they are QUEUED, not in the aisle -- and counting them
+    # here put a spike on the end of the aisle-occupancy chart that was pure
+    # artefact. On a completed run both expressions are zero.
+    final_in_aisle = 0
+    for occ in lane_occ:
+        final_in_aisle += len(occ)
     seated_curve.append((round(total, 6), seated_count))
-    aisle_curve.append((round(total, 6), 0 if completed else n - seated_count))
+    aisle_curve.append((round(total, 6), final_in_aisle))
     if record_replay:
         frames_state.append(list(pstate))
         frames_x.append([round(v, 4) for v in px])
@@ -776,6 +838,11 @@ def run(
     # ---- results ----------------------------------------------------------
     records: List[PassengerRecord] = []
     walk_total = stow_total = shuf_total = blocked_total = 0.0
+    # Two different questions, kept apart on purpose (ENGINE_SPEC 7):
+    #   aisle_times = sit - enter  -- "how long was I stuck in the aisle"
+    #   sits        = sit          -- "how long from doors-open until I sat down",
+    #                                 which includes the jetbridge queue
+    aisle_times: List[float] = []
     sits: List[float] = []
     for p in queue:
         i = p.boardingIndex
@@ -786,6 +853,7 @@ def run(
         stow_total += pstow[i]
         shuf_total += pshuf[i]
         blocked_total += pblocked[i]
+        aisle_times.append(sit - enter)
         sits.append(sit)
         records.append(PassengerRecord(
             id=p.id, seat=(s.id if s else ""), row=(s.rowNumber if s else 0),
@@ -836,6 +904,7 @@ def run(
         door_stats[did] = stats
     sequencing = round(min(scores), 6) if scores else 0.0
 
+    sorted_aisle = sorted(aisle_times)
     sorted_sits = sorted(sits)
     result = RunResult(
         totalSeconds=round(total, 6),
@@ -862,9 +931,25 @@ def run(
         gateChecks=gate_checks,
         binSearches=bin_searches,
         aisleBlockEvents=block_events,
-        p50TimeToSeat=round(percentile(sorted_sits, 0.50), 6),
-        p90TimeToSeat=round(percentile(sorted_sits, 0.90), 6),
-        maxTimeToSeat=round(sorted_sits[-1], 6) if sorted_sits else 0.0,
+        # Time from crossing the aircraft door to being seated. This is the
+        # quantity `perPassenger[].timeInAisle` already held and the one the
+        # "passenger wait time" chart exists to show: a fast mean hiding a
+        # miserable tail. It used to be computed off `sitTime`, which made the
+        # reported maximum identically `totalSeconds` on every completed run.
+        p50AisleSeconds=round(percentile(sorted_aisle, 0.50), 6),
+        p90AisleSeconds=round(percentile(sorted_aisle, 0.90), 6),
+        maxAisleSeconds=round(sorted_aisle[-1], 6) if sorted_aisle else 0.0,
+        # Time from the start of boarding to being seated -- the same wait plus
+        # however long you stood on the jetbridge. There is deliberately no
+        # `max` here: the last person to sit down sits at `totalSeconds` by
+        # definition, so a maximum of this series is not a statistic.
+        p50BoardingWaitSeconds=round(percentile(sorted_sits, 0.50), 6),
+        p90BoardingWaitSeconds=round(percentile(sorted_sits, 0.90), 6),
+        # Deprecated aliases, kept so existing consumers keep working. They now
+        # carry the AISLE quantity, i.e. they are finally what their name says.
+        p50TimeToSeat=round(percentile(sorted_aisle, 0.50), 6),
+        p90TimeToSeat=round(percentile(sorted_aisle, 0.90), 6),
+        maxTimeToSeat=round(sorted_aisle[-1], 6) if sorted_aisle else 0.0,
         throughputPaxPerMin=round(n / (total / 60.0), 6) if total > 0 else 0.0,
         completed=completed,
         doorStats=door_stats,

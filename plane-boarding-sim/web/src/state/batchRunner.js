@@ -6,7 +6,8 @@
  * before the worker exists. Both paths emit the same events.
  *
  * Worker protocol (per the agreed interface):
- *   post   {type:'start', config, strategies:[...], runs:N, sweep?}
+ *   post   {type:'start', config, strategies:[...], runs:N,
+ *           sweep?:{loadFactors:[...], runs:N}}
  *   recv   {type:'progress', done, total, partial:BatchResult}
  *          {type:'done', result:BatchResult}
  *          {type:'error', message}
@@ -16,6 +17,7 @@
  */
 import { createBatchWorker } from '../lib/engineBridge.js'
 import { aggregateBatch } from './aggregate.js'
+import { autoSweepRuns } from './sweep.js'
 
 /**
  * Start a batch. Returns a handle with `stop()`.
@@ -25,14 +27,22 @@ import { aggregateBatch } from './aggregate.js'
  * @param {object} opts.config   SimConfig
  * @param {string[]} opts.strategies
  * @param {number} opts.runs     replications per strategy
+ * @param {?{loadFactors:number[], runs:number}} [opts.sweep] load-factor sweep
+ *        (chart 7). `runs` is the replications PER POINT and is always
+ *        explicit here, so the count the panel showed is the count that runs.
  * @param {object} [opts.names]  STRATEGIES metadata, so series carry real names
  * @param {(e:{done:number,total:number,partial:object})=>void} opts.onProgress
  * @param {(result:object)=>void} opts.onDone
  * @param {(message:string)=>void} opts.onError
  */
-export function startBatch({ engine, config, strategies, runs, names, onProgress, onDone, onError }) {
+export function startBatch({ engine, config, strategies, runs, sweep, names, onProgress, onDone, onError }) {
   const list = strategies && strategies.length ? strategies : [config.strategy]
-  const total = list.length * runs
+  const spec = sweep && Array.isArray(sweep.loadFactors) && sweep.loadFactors.length ? sweep : null
+  const sweepRuns = spec ? Math.max(1, Math.trunc(spec.runs ?? autoSweepRuns(runs))) : 0
+  const sweepTotal = spec ? list.length * spec.loadFactors.length * sweepRuns : 0
+  // The sweep is part of the same job list, so it is part of the same total:
+  // a progress bar that stops at 100% and keeps running is a bar that lies.
+  const total = list.length * runs + sweepTotal
 
   const worker = createBatchWorker()
   if (worker) {
@@ -52,7 +62,13 @@ export function startBatch({ engine, config, strategies, runs, names, onProgress
     worker.onerror = (err) => {
       if (!stopped) onError?.(err?.message || 'Worker failed to start')
     }
-    worker.postMessage({ type: 'start', config, strategies: list, runs })
+    worker.postMessage({
+      type: 'start',
+      config,
+      strategies: list,
+      runs,
+      ...(spec ? { sweep: { loadFactors: [...spec.loadFactors], runs: sweepRuns } } : {}),
+    })
     return {
       stop() {
         stopped = true
@@ -68,17 +84,58 @@ export function startBatch({ engine, config, strategies, runs, names, onProgress
   let done = 0
   let i = 0
 
+  // The same flat job list the worker plans, so the two paths produce the same
+  // BatchResult — the main runs first, then the sweep points.
+  const jobs = []
+  for (const key of list) for (let r = 0; r < runs; r++) jobs.push({ kind: 'main', key, run: r })
+  if (spec) {
+    for (const key of list) {
+      for (let li = 0; li < spec.loadFactors.length; li++) {
+        for (let r = 0; r < sweepRuns; r++) {
+          jobs.push({ kind: 'sweep', key, li, loadFactor: spec.loadFactors[li], run: r })
+        }
+      }
+    }
+  }
+
+  // Running means, so a stopped or partial sweep still plots honestly.
+  const sweepAcc = new Map()
+  const sweepBlock = spec
+    ? {
+        loadFactors: [...spec.loadFactors],
+        byStrategy: Object.fromEntries(list.map((k) => [k, spec.loadFactors.map(() => null)])),
+      }
+    : null
+
+  const assemble = (complete) => {
+    const partial = aggregateBatch({ byStrategy, names, config, done, total, complete })
+    if (sweepBlock) partial.sweep = sweepBlock
+    return partial
+  }
+
   const schedule = (fn) => setTimeout(fn, 0)
 
   function chunk() {
     if (cancelled) return
     const started = Date.now()
-    while (i < total && Date.now() - started < 24) {
-      const strategyIndex = Math.floor(i / runs)
-      const runIndex = i % runs
-      const key = list[strategyIndex]
+    while (i < jobs.length && Date.now() - started < 24) {
+      const job = jobs[i]
       try {
-        byStrategy[key].push(engine.runSimulation({ ...config, strategy: key, seed: (config.seed | 0) + runIndex }))
+        const result = engine.runSimulation({
+          ...config,
+          strategy: job.key,
+          seed: (config.seed | 0) + job.run,
+          ...(job.kind === 'sweep' ? { loadFactor: job.loadFactor } : {}),
+        })
+        if (job.kind === 'main') byStrategy[job.key].push(result)
+        else {
+          const cell = `${job.key}|${job.li}`
+          const acc = sweepAcc.get(cell) || { sum: 0, n: 0 }
+          acc.sum += result.totalSeconds
+          acc.n += 1
+          sweepAcc.set(cell, acc)
+          sweepBlock.byStrategy[job.key][job.li] = acc.sum / acc.n
+        }
       } catch (err) {
         onError?.(err?.message || String(err))
         return
@@ -86,8 +143,8 @@ export function startBatch({ engine, config, strategies, runs, names, onProgress
       i += 1
       done += 1
     }
-    const partial = aggregateBatch({ byStrategy, names, config, done, total, complete: i >= total })
-    if (i >= total) onDone?.(partial)
+    const partial = assemble(i >= jobs.length)
+    if (i >= jobs.length) onDone?.(partial)
     else {
       onProgress?.({ done, total, partial })
       schedule(chunk)

@@ -6,17 +6,24 @@
  * build one against any defaults object.
  *
  * Actions
- *   SET_FIELD    { field, value, aircraft? }  set one config key
+ *   SET_FIELD    { field, value, aircraft?, prevAircraft? }  set one config key
  *   TOGGLE_DOOR  { doorId }                   flip a door, never emptying the set
  *   APPLY_PRESET { patch, aircraft }          defaults + preset patch
  *   LOAD_CONFIG  { config, aircraft? }        defaults + an arbitrary partial
- *   RESET        {}                           back to defaults
+ *   RESET        { aircraft? }                 back to defaults
  *
  * `aircraft` is the *resolved* aircraft the new config refers to; the reducer
  * needs it to keep the door set legal and it must stay pure, so the caller
  * supplies it rather than the reducer reaching for a catalogue.
  */
-import { defaultDoorsFor } from './configDefaults.js'
+import { deepEqual } from './deepEqual.js'
+import { airframeChanges, defaultDoorsFor, effectiveDefaults } from './configDefaults.js'
+import { sanitizeLoadFactors } from './sweep.js'
+
+// Re-exported so the long-standing `state/configReducer.js` import site keeps
+// working; the implementation moved to lib/ to keep the defaults layering,
+// which also needs it, out of an import cycle.
+export { deepEqual }
 
 /**
  * Drop keys the engine does not know about.
@@ -99,6 +106,12 @@ export function sanitizeConfig(config, aircraft, defaults) {
   if (Number.isFinite(next.runs)) next.runs = Math.max(1, Math.round(next.runs))
   if (Number.isFinite(next.zoneCount)) next.zoneCount = Math.max(1, Math.round(next.zoneCount))
   if (!Number.isFinite(next.seed)) next.seed = 0
+  // Arrays are the one shape `coerceToSchema` cannot check, and a sweep axis
+  // of `['banana']` would reach the worker and plot nothing.
+  if (defaults && Object.prototype.hasOwnProperty.call(defaults, 'sweepLoadFactors')) {
+    next.sweepLoadFactors = sanitizeLoadFactors(next.sweepLoadFactors, defaults.sweepLoadFactors)
+  }
+  if (next.sweepRuns != null) next.sweepRuns = Math.max(1, Math.round(Number(next.sweepRuns) || 1))
   return next
 }
 
@@ -111,6 +124,12 @@ export function makeConfigReducer(defaults) {
         if (action.field === 'aircraftId') {
           // A new airframe has a different door list; adopt its default doors.
           next.doors = defaultDoorsFor(action.aircraft)
+          // ...and its own parameter defaults, for every value the user has
+          // not explicitly moved away from the old airframe's. WYSIWYG: the
+          // numbers change ON SCREEN rather than behind the panel's back.
+          for (const change of airframeChanges(state, defaults, action.prevAircraft, action.aircraft)) {
+            next[change.key] = change.to
+          }
           return sanitizeConfig(next, action.aircraft, defaults)
         }
         if (action.field === 'doors') return sanitizeConfig(next, action.aircraft, defaults)
@@ -125,18 +144,23 @@ export function makeConfigReducer(defaults) {
         return { ...state, doors: sanitizeDoors(proposed, action.aircraft) }
       }
 
+      // A preset is "defaults, then these values" — and the defaults for the
+      // airframe the preset names include that airframe's own. A preset that
+      // states a parameter still wins it: it is the explicit layer.
       case 'APPLY_PRESET': {
-        const merged = { ...defaults, ...pickKnown(action.patch, defaults) }
+        const base = effectiveDefaults(defaults, action.aircraft)
+        const merged = { ...base, ...pickKnown(action.patch, defaults) }
         return sanitizeConfig(merged, action.aircraft, defaults)
       }
 
       case 'LOAD_CONFIG': {
-        const merged = { ...defaults, ...pickKnown(action.config, defaults) }
+        const base = effectiveDefaults(defaults, action.aircraft)
+        const merged = { ...base, ...pickKnown(action.config, defaults) }
         return sanitizeConfig(merged, action.aircraft, defaults)
       }
 
       case 'RESET':
-        return { ...defaults }
+        return sanitizeConfig(effectiveDefaults(defaults, action.aircraft), action.aircraft, defaults)
 
       default:
         return state
@@ -151,20 +175,4 @@ export function configDiff(config, defaults) {
     if (!deepEqual(value, defaults[key])) out[key] = value
   }
   return out
-}
-
-export function deepEqual(a, b) {
-  if (a === b) return true
-  if (typeof a !== typeof b || a === null || b === null) return false
-  if (Array.isArray(a) || Array.isArray(b)) {
-    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
-    return a.every((v, i) => deepEqual(v, b[i]))
-  }
-  if (typeof a === 'object') {
-    const ka = Object.keys(a)
-    const kb = Object.keys(b)
-    if (ka.length !== kb.length) return false
-    return ka.every((k) => deepEqual(a[k], b[k]))
-  }
-  return false
 }

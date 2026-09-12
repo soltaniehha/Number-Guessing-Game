@@ -98,6 +98,12 @@ export function relevanceOf(key, config, aircraft) {
         ? RELEVANT
         : no('Nobody is carrying a bag, so nothing is ever stowed.')
 
+    case 'sweepLoadFactors':
+    case 'sweepRuns':
+      return config.sweepEnabled
+        ? RELEVANT
+        : no('Turn the load-factor sweep on to choose its points.')
+
     case 'stowBagExponent':
       return twoBaggers > 0
         ? RELEVANT

@@ -162,6 +162,25 @@ def _analyse_layout(layout: Sequence[str]) -> Dict[str, Dict[str, Any]]:
     if not aisle_positions:
         raise ConfigError(f"layout {list(layout)!r} has no '{AISLE}' aisle marker")
 
+    # Everything below is keyed by seat LETTER, and `_resolve` looks the letter
+    # up again per row to build the seats. A layout that repeats a letter would
+    # therefore silently collapse two physically distinct positions onto one set
+    # of geometry -- both "D" seats in a 3-3-3 would get the depth, block and bin
+    # run of whichever came last, and the error would show up only as a boarding
+    # time that is quietly wrong. Fail at load instead.
+    seen: Dict[str, int] = {}
+    for i, s in enumerate(layout):
+        if s == AISLE:
+            continue
+        if s in seen:
+            raise ConfigError(
+                f"layout {list(layout)!r} repeats seat letter {s!r} at positions "
+                f"{seen[s]} and {i}. Seat letters index this cabin's per-letter "
+                f"geometry (aisle, depth, block, bin run), so they must be unique "
+                f"within a layout."
+            )
+        seen[s] = i
+
     # Bin runs: maximal seat groups between aisle markers.
     runs: List[List[int]] = []
     current: List[int] = []

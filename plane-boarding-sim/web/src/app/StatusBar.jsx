@@ -7,6 +7,7 @@ import { useClock, usePlayback, useStore } from '../state/StoreProvider.jsx'
 import { fmtClock, fmtInt, fmtSpeed } from '../lib/format.js'
 import { sampleAt } from '../lib/curves.js'
 import { readSummaries } from '../state/aggregate.js'
+import { runCounts, sweepSpecFor } from '../state/sweep.js'
 
 export function StatusBar({ inert }) {
   const { mode } = useStore()
@@ -49,7 +50,14 @@ function CabinStatus() {
 
 function BatchStatus() {
   const { batch, config, mode } = useStore()
-  const total = batch.total || config.runs
+  // Before a run starts there is no batch to measure, so show the size of the
+  // run the Run button would start — sweep included, or the bar would jump.
+  const planned = runCounts({
+    strategies: mode === 'compare' ? (config.compareStrategies || []).length : 1,
+    runs: config.runs,
+    sweep: sweepSpecFor(config, mode),
+  }).total
+  const total = batch.total || planned
   const frac = total > 0 ? batch.done / total : 0
   const best = bestStrategy(batch.result)
 

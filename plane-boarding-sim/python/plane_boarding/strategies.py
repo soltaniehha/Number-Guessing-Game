@@ -1,4 +1,4 @@
-"""The fifteen boarding strategies, plus the universal post-processing pipeline.
+"""The sixteen boarding strategies, plus the universal post-processing pipeline.
 
 A strategy is a pure function `(passengers, aircraft, cfg, rng) -> queue`. It
 stamps `groupLabel` on each passenger and returns them in boarding order. All
@@ -29,6 +29,36 @@ StrategyFn = Callable[[List[Passenger], Aircraft, SimConfig, PCG32], List[Passen
 
 #: Tiers that buy you an earlier slot within your group (never ahead of everyone).
 ELITE_TIERS = ("first", "business", "premium", "elite_top", "elite_mid")
+
+#: How many boarding groups a status tier is worth, for the schemes that merge
+#: status INTO the group assignment rather than sorting within a group.
+#:
+#: This is the construction every real carrier uses, and the one Southwest
+#: shipped in January 2026: group = f(where you sit, what you are worth), one
+#: merged ordering. The alternative -- "elites board at the front of their
+#: assigned group" -- is done by nobody, and on an outside-in scheme it is
+#: actively perverse: elites disproportionately buy AISLE seats, outside-in
+#: calls aisles last, so it seats a top-tier flyer behind every basic-economy
+#: window passenger. See docs/RESEARCH_AIRLINES.md 7 #2.
+STATUS_GROUP_SHIFT: Dict[str, int] = {
+    "first": -3,
+    "business": -3,
+    "elite_top": -3,
+    "premium": -2,
+    "elite_mid": -2,
+    "cardholder": -1,
+    "standard": 0,
+    "basic": 1,
+}
+
+
+def _status_shift(p: Passenger) -> int:
+    """Groups earlier (negative) or later (positive) this passenger's status is
+    worth. A premium cabin outranks any economy status the passenger also holds."""
+    cls = p.seat.classKey if p.seat is not None else "economy"
+    if cls != "economy":
+        return STATUS_GROUP_SHIFT.get(cls, 0)
+    return STATUS_GROUP_SHIFT.get(p.tier, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -348,36 +378,122 @@ def strat_common_sense_5tier(pax: List[Passenger], ac: Aircraft, cfg: SimConfig,
     that is economy, using five gate-announceable groups. It is a coarse reverse
     pyramid quantised to what a boarding pass can print, preserving the two
     effects that actually matter: outside-in kills seat shuffles, rear-first
-    spreads the aisle. Elite status buys the front of your group rather than the
-    front of the aeroplane, so status still means something without wrecking the
-    flow.
+    spreads the aisle.
+
+    **Status is an input to the group assignment, not a sort within it.** The
+    seat location proposes a group; the passenger's status ladder then moves
+    them earlier or later by a whole group or three, and the result is ONE
+    merged ordering. That is the construction Southwest shipped in 2026 and the
+    only one a revenue department will sign: a status flyer in an aisle seat
+    lands in an early group, a basic-economy flyer in an aisle seat lands in the
+    last one. The previous rule -- elites at the front of their assigned group
+    -- looked like a compromise and was in fact the worst of both worlds, since
+    outside-in calls aisles last and elites are disproportionately in aisles.
+    See docs/RESEARCH_AIRLINES.md 7 #2.
+
+    Party cohesion is MANDATORY here rather than optional (registry flag
+    `requiresCohesion`). Every deployed carrier that boards by seat location
+    promotes the whole booking to its earliest-boarding member -- United's "same
+    and highest applicable", Lufthansa's "and companions" -- so a run of this
+    strategy with cohesion off is not a model of anything real.
     """
     econ_slots = ac.economyRowSlots
     mid = econ_slots[len(econ_slots) // 2] if econ_slots else 0
 
-    premium: List[Passenger] = []
-    groups: List[List[Passenger]] = [[], [], [], []]  # groups 2..5
-    for p in pax:
+    names = ["Group 1 (premium + top status)",
+             "Group 2 (rear windows)",
+             "Group 3 (fwd windows + rear middles)",
+             "Group 4 (fwd middles + rear aisles)",
+             "Group 5 (forward aisles + basic economy)"]
+    n_groups = len(names)
+
+    def base_group(p: Passenger) -> int:
+        """Where seat location alone would put you: 0 = premium cabin, then the
+        outside-in x rear-first ladder across groups 1..4."""
         if p.seat.classKey != "economy":
-            premium.append(p)
-            continue
+            return 0
         rear = p.rowSlot >= mid
         kind = p.seat.kind
         if kind == WINDOW:
-            groups[0 if rear else 1].append(p)
-        elif kind == MIDDLE:
-            groups[1 if rear else 2].append(p)
-        else:
-            groups[2 if rear else 3].append(p)
+            return 1 if rear else 2
+        if kind == MIDDLE:
+            return 2 if rear else 3
+        return 3 if rear else 4
 
-    names = ["Group 1 (premium cabin)", "Group 2 (rear windows)",
-             "Group 3 (fwd windows + rear middles)", "Group 4 (fwd middles + rear aisles)",
-             "Group 5 (forward aisles)"]
-    out = _label(_elites_first(_shuffled(rng, premium)), names[0])
-    for i, bucket in enumerate(groups):
+    buckets: List[List[Passenger]] = [[] for _ in names]
+    for p in pax:
+        g = base_group(p) + _status_shift(p)
+        if g < 0:
+            g = 0
+        elif g >= n_groups:
+            g = n_groups - 1
+        buckets[g].append(p)
+
+    out: List[Passenger] = []
+    for i, bucket in enumerate(buckets):
         ordered = _shuffled(rng, bucket)
         ordered.sort(key=lambda p: -p.rowSlot)   # rear to front, shuffled within a row
-        out.extend(_label(_elites_first(ordered), names[i + 1]))
+        out.extend(_label(ordered, names[i]))
+    return out
+
+
+def strat_southwest_2026(pax: List[Passenger], ac: Aircraft, cfg: SimConfig, rng: PCG32) -> List[Passenger]:
+    """Southwest's post-open-seating scheme, live since 27 January 2026.
+
+    The single most useful strategy in this file for the headline comparison,
+    because it is a real converged design rather than a strawman: an airline
+    that abandoned 53 years of open seating and, given a blank sheet, chose
+    **WilMA x back-to-front merged with fare and status into eight groups**.
+
+    Construction (docs/RESEARCH_AIRLINES.md 1.4):
+
+      * seat location gives a base rank -- window before middle before aisle as
+        the outer loop, rear before front within each -- so it is `wilma_zoned`
+        by another name;
+      * that rank is projected onto EIGHT groups, which is the number Southwest
+        actually prints;
+      * fare and status then shift you whole groups earlier (A-List Preferred,
+        Choice Extra, cardholders) or later (Basic), producing one merged
+        ordering rather than a status sort inside a location group.
+
+    Eight groups rather than five is not cosmetic: finer quantisation preserves
+    more of the underlying spatial order, and it is the difference between a
+    scheme that announces its flow logic and one that only gestures at it.
+    """
+    bands = _bands(ac, cfg.zoneCount)
+    n_bands = len(bands)
+    max_depth = max(1, ac.maxDepth)
+    n_cells = max_depth * n_bands
+    n_groups = 8
+
+    def location_rank(p: Passenger) -> int:
+        # Deepest seat (window) first, then rearmost band first: identical to
+        # the emission order of `wilma_zoned`.
+        depth_rank = max_depth - max(1, min(max_depth, p.depth))
+        band_rank = n_bands - 1 - _band_of(p.rowSlot, bands)
+        return depth_rank * n_bands + band_rank
+
+    buckets: List[List[Passenger]] = [[] for _ in range(n_groups)]
+    for p in pax:
+        g = (location_rank(p) * n_groups) // n_cells
+        g += _status_shift(p)
+        if g < 0:
+            g = 0
+        elif g >= n_groups:
+            g = n_groups - 1
+        buckets[g].append(p)
+
+    out: List[Passenger] = []
+    for i, bucket in enumerate(buckets):
+        ordered = _shuffled(rng, bucket)
+        # WilMA still runs INSIDE each group, which is what Southwest's own
+        # material describes ("Group 1 ... reportedly the window subset first").
+        # It matters most for the passengers a status shift dropped into a group
+        # their seat would not have earned: without this an A-List aisle seat
+        # called in Group 2 would board ahead of the Group 2 windows and undo
+        # the zero-interference property the scheme is built on.
+        ordered.sort(key=lambda p: (-p.depth, -p.rowSlot))
+        out.extend(_label(ordered, f"Group {i + 1} of {n_groups}"))
     return out
 
 
@@ -421,6 +537,21 @@ def strat_slowest_first(pax: List[Passenger], ac: Aircraft, cfg: SimConfig, rng:
 # Universal post-processing (ENGINE_SPEC 4)
 # ---------------------------------------------------------------------------
 
+def requires_cohesion(strategy: str) -> bool:
+    """Is party cohesion structural to this strategy rather than a friction?
+
+    For most strategies `keepPartiesTogether` is a friction knob: turning it off
+    shows you what the method would be worth if families did not exist. For a
+    strategy whose group assignment is a joint function of seat location and
+    fare -- `common_sense_5tier`, `southwest_2026` -- it is part of the
+    construction. Every carrier that boards this way promotes the whole booking
+    to its earliest-boarding member, so a run with cohesion off is not a model
+    of anything anyone operates. Those strategies force it on.
+    """
+    entry = STRATEGIES.get(strategy)
+    return bool(entry and entry.get("requiresCohesion"))
+
+
 def apply_post_processing(
     queue: List[Passenger], cfg: SimConfig, rng: PCG32
 ) -> List[Passenger]:
@@ -431,6 +562,7 @@ def apply_post_processing(
     Steffen's theoretical 2x to the ~20-25% airlines actually measure.
     """
     out = list(queue)
+    cohere = cfg.keepPartiesTogether or requires_cohesion(cfg.strategy)
 
     # 1. Preboards. Stable, so the strategy's ordering survives among them.
     if cfg.preboardFirst:
@@ -444,7 +576,13 @@ def apply_post_processing(
     #    first -- families self-organise so the window passenger goes in first.
     #    Note this deliberately runs AFTER preboarding, so a party containing a
     #    wheelchair passenger boards with them, which is what actually happens.
-    if cfg.keepPartiesTogether:
+    #    Cohesion is PROMOTE-TO-EARLIEST: the party is emitted whole at the
+    #    queue position of whichever member the strategy called first, never at
+    #    a mean or a latest position. That is what every carrier with a published
+    #    companion rule does (United "same and highest applicable", Lufthansa
+    #    "and companions"), and it is verified by
+    #    test_party_cohesion_promotes_to_the_earliest_member.
+    if cohere:
         members: Dict[int, List[Passenger]] = {}
         for p in out:
             members.setdefault(p.partyId, []).append(p)
@@ -510,19 +648,29 @@ STRATEGIES: Dict[str, Dict[str, Any]] = {
     "wilma": {
         "name": "WilMA (outside-in)",
         "description": "All windows, then middles, then aisles. Eliminates seat interference by "
-                       "construction. United's current scheme.",
+                       "construction. Real deployments are always hybrids: United applies it only "
+                       "to the economy residual below Groups 1-2 and boards Basic Economy after "
+                       "the aisles; Lufthansa and ANA run it too, and Southwest adopted it in "
+                       "January 2026.",
         "fn": strat_wilma,
     },
     "wilma_zoned": {
         "name": "WilMA x zones (outside-in, back-to-front)",
         "description": "Outside-in, and rear-to-front within each seat-column band. Adds aisle "
-                       "spreading to WilMA without losing its zero-interference property.",
+                       "spreading to WilMA without losing its zero-interference property. This is "
+                       "a live scheme, not a proposal: it is the structure Southwest went to on "
+                       "27 January 2026 -- see southwest_2026 for the version with the fare and "
+                       "status ladder merged in.",
         "fn": strat_wilma_zoned,
     },
     "steffen_perfect": {
         "name": "Steffen (perfect)",
         "description": "Alternating rows, window to aisle, alternating sides. The theoretical "
-                       "optimum -- and unimplementable, which is exactly the point.",
+                       "optimum, and unimplementable -- but not mainly for the reason usually "
+                       "given. Ahead of passenger compliance come mandatory party cohesion, "
+                       "alliance and status contractual obligations, and the plain absence of any "
+                       "gate infrastructure for sequencing individual passengers. Compliance is "
+                       "the reason this model can measure, not the binding one.",
         "fn": strat_steffen_perfect,
     },
     "steffen_modified": {
@@ -533,8 +681,12 @@ STRATEGIES: Dict[str, Dict[str, Any]] = {
     },
     "reverse_pyramid": {
         "name": "Reverse pyramid",
-        "description": "Diagonal wave from rear-window to front-aisle. America West measured "
-                       "~20% off full flights with this in revenue service.",
+        "description": "Diagonal wave from rear-window to front-aisle, and the best-evidenced "
+                       "flow method ever flown: America West measured -2 minutes (~20%) on full "
+                       "flights and -21% departure delays over the first three months (van den "
+                       "Briel et al., Interfaces 35(3):191-201, 2005). It disappeared through two "
+                       "merger integrations and no source gives a performance reason. JAL's 2024 "
+                       "window-and-rear scheme is a coarse two-group descendant.",
         "fn": strat_reverse_pyramid,
     },
     "rotating_zone": {
@@ -550,28 +702,57 @@ STRATEGIES: Dict[str, Dict[str, Any]] = {
         "fn": strat_block_boarding,
     },
     "open_seating": {
-        "name": "Open seating (Southwest legacy)",
-        "description": "No assigned seats; passengers choose on entering the cabin. Fast, because "
-                       "people self-select to avoid climbing over each other.",
+        "name": "Open seating (Southwest, 1971-2026)",
+        "description": "RETIRED. No assigned seats; passengers choose on entering the cabin. Fast, "
+                       "because people self-select to avoid climbing over each other. Southwest "
+                       "ran it for 53 years and ended it on 27 January 2026; no airline of "
+                       "consequence now uses it, so this is a historical baseline rather than a "
+                       "live option.",
         "fn": strat_open_seating,
     },
     "priority_5tier": {
         "name": "5-tier priority (revenue)",
-        "description": "Preboard, premium, elites, main, basic economy. Sells queue position and "
-                       "has no spatial logic at all.",
+        "description": "Preboard, premium, elites, main, basic economy: the revenue-only case, "
+                       "representing Delta, American and Air France. It has no DELIBERATE spatial "
+                       "logic, but it is not spatially neutral -- status and premium cabins sit "
+                       "forward, so selling queue position quietly buys front-to-back boarding. "
+                       "Compare against the revenue-then-flow carriers (United, Lufthansa, ANA, "
+                       "JAL, BA, Southwest) modelled by wilma and southwest_2026. Tier placement "
+                       "is carrier-dependent at the top: this models the generic US-legacy case "
+                       "with First and Business in Tier 1, where American has preboarded them "
+                       "since 1 May 2025.",
         "fn": strat_priority_5tier,
     },
     "common_sense_5tier": {
         "name": "5-tier common sense",
-        "description": "Premium cabin first (commercially fixed), then outside-in crossed with "
-                       "rear-first across five printable groups. The best boarding you could "
-                       "actually sell.",
+        "description": "Outside-in crossed with rear-first across five printable groups, with fare "
+                       "and status merged INTO the group assignment rather than sorted within it, "
+                       "so a status flyer in an aisle seat still boards early. The best boarding "
+                       "you could actually sell. Party cohesion is mandatory, as it is for every "
+                       "carrier that boards by seat location.",
+        "requiresCohesion": True,
         "fn": strat_common_sense_5tier,
+    },
+    "southwest_2026": {
+        "name": "Southwest 2026 (WilMA x zones + status, 8 groups)",
+        "description": "The real converged design: Southwest replaced 53 years of open seating on "
+                       "27 January 2026 with window/middle/aisle boarded rear-to-front, merged "
+                       "with fare and Rapid Rewards status into eight numbered groups. Live on "
+                       "roughly 4,000 daily flights, which makes this the benchmark any proposal "
+                       "in this list has to beat.",
+        "requiresCohesion": True,
+        "fn": strat_southwest_2026,
     },
     "by_bags": {
         "name": "Bag-count boarding",
-        "description": "Zero-bag passengers first, then one, then two. Tests the "
-                       "'bags are the bottleneck' hypothesis directly.",
+        "description": "Zero-bag passengers first, then one, then two. Tests the 'bags are the "
+                       "bottleneck' hypothesis directly -- and the field evidence says bags win: "
+                       "Spirit reportedly cut boarding by ~6 minutes by charging for carry-ons, "
+                       "roughly three times the best claimed ordering benefit, from a pricing "
+                       "change with no gate process change at all. Boarding has slowed from ~15 "
+                       "minutes in the 1970s to 30-40 for ~140 passengers today. Note the "
+                       "literature finds the REVERSE order (most luggage first) is what shortens "
+                       "boarding, so this particular sort is a foil.",
         "fn": strat_by_bags,
     },
     "slowest_first": {

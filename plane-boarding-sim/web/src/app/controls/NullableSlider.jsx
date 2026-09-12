@@ -7,13 +7,18 @@ import { snap } from '../../lib/format.js'
  * deliberately modelling a retrofit.
  */
 export function NullableSlider({
-  id, label, explain, value, autoValue, autoLabel = 'Auto', min, max, step, format, announce, disabled, reason, onChange,
+  id, label, explain, value, autoValue, autoLabel = 'Auto',
+  // Where the automatic value comes from, said out loud. Bin capacity inherits
+  // from the airframe; other auto values do not, and saying so wrongly is
+  // worse than saying nothing.
+  autoSpoken = 'taken from the airframe',
+  min, max, step, format, announce, disabled, reason, onChange,
 }) {
   const isAuto = value == null
   const effective = isAuto ? autoValue : value
   const shown = typeof format === 'function' ? format(effective) : String(effective)
   const said = typeof announce === 'function' ? announce(effective) : shown
-  const spoken = isAuto ? `${said}, taken from the airframe` : said
+  const spoken = isAuto ? `${said}, ${autoSpoken}` : said
 
   return (
     <Field

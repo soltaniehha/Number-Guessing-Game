@@ -496,6 +496,30 @@
 .door__id { font-size: 12px; font-weight: 600; }
 .door__meta { font-size: 10.5px; color: var(--text-3); text-align: right; }
 
+/* ------------------------------------------------------- sweep & cost --- */
+
+/* The load-factor points reuse the chip set; only the density differs. */
+.chips--points { margin-bottom: 0; }
+
+/* What a run will cost, shown before it is started. */
+.runcost {
+  margin: 2px 0 4px;
+  padding: 8px 10px;
+  border: 1px dashed var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.runcost__line { margin: 0; font-size: 11px; color: var(--text-3); }
+.runcost__total { margin: 4px 0 0; font-size: 11.5px; font-weight: 600; color: var(--text-2); }
+
+/* "the airframe set this", said next to the control it set. */
+.field__help--airframe {
+  margin-top: 3px;
+  padding-left: 7px;
+  border-left: 2px solid var(--accent);
+  color: var(--text-2);
+}
+
 /* --------------------------------------------------------------- cards --- */
 
 .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }

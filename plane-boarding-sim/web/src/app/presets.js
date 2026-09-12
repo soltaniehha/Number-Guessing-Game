@@ -30,7 +30,7 @@ export const PRESETS = [
     name: 'European LCC turnaround',
     blurb: 'Twenty-five minutes on stand: both airstairs open, small bins, and nobody listening to the group calls.',
     patch: {
-      aircraftId: 'b737-8200',
+      aircraftId: 'b737_max8',
       strategy: 'random',
       loadFactor: 0.96,
       doors: ['1L', '2L'],
@@ -54,7 +54,9 @@ export const PRESETS = [
       doors: ['1L'],
       doorAssignment: 'single',
       zoneCount: 3,
-      binBagsPerRowSide: 2,
+      // Bin capacity is deliberately NOT stated: the E175 has the smallest
+      // bins in the roster and the airframe's own number (1 bag per row-side)
+      // is the whole point of the scenario.
       binSearchRadius: 1,
       gateCheckPenalty: 30,
       bagWeights: { 0: 0.12, 1: 0.6, 2: 0.28 },
@@ -65,7 +67,7 @@ export const PRESETS = [
     name: 'Long-haul widebody',
     blurb: 'Twin-aisle, two doors, everybody with a full-size wheelie and a duty-free bag.',
     patch: {
-      aircraftId: 'b777-300er',
+      aircraftId: 'b777_300er',
       strategy: 'block_boarding',
       loadFactor: 0.92,
       doors: ['1L', '2L'],
@@ -83,7 +85,7 @@ export const PRESETS = [
     name: 'Southwest legacy open seating',
     blurb: 'No assigned seats at all: board in check-in order and grab the first aisle you like.',
     patch: {
-      aircraftId: 'b737-800',
+      aircraftId: 'b737_max8',
       strategy: 'open_seating',
       loadFactor: 0.95,
       doors: ['1L'],

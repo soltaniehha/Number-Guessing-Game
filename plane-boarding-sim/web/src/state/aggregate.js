@@ -227,6 +227,11 @@ export function readSummaries(batch) {
         p05: t?.p05 ?? 0,
         p50: t?.p50 ?? 0,
         p95: t?.p95 ?? 0,
+        // Bags that never made it into the cabin. An airframe property as much
+        // as a strategy one — it is how you can see a tight-binned regional
+        // jet behaving like one.
+        gateChecks: entry?.meanGateChecks ?? 0,
+        binSearches: entry?.meanBinSearches ?? 0,
       }
     })
     .filter((s) => s.n > 0)

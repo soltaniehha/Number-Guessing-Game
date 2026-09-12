@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { PRESETS, PRESET_BY_ID } from '../../src/app/presets.js'
 import { makeConfigReducer } from '../../src/state/configReducer.js'
+import { SHELL_DEFAULTS } from '../../src/state/configDefaults.js'
 import { defaults, engine } from './fixtures.js'
 
 const reducer = makeConfigReducer(defaults)
@@ -44,7 +45,7 @@ describe('presets', () => {
     const config = apply(PRESET_BY_ID.longhaul_widebody)
     for (const key of Object.keys(config)) {
       const known = Object.prototype.hasOwnProperty.call(engine.DEFAULTS, key)
-      const shellField = ['aircraftId', 'strategy', 'seed', 'doors', 'runs', 'compareStrategies'].includes(key)
+      const shellField = Object.prototype.hasOwnProperty.call(SHELL_DEFAULTS, key) || key === 'doors'
       expect(known || shellField).toBe(true)
     }
   })

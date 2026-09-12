@@ -51,6 +51,22 @@ MIN_SPEED_FRACTION: float = CONSTANTS["MIN_SPEED_FRACTION"]
 INCH: float = CONSTANTS["INCH"]
 MAX_SIM_SECONDS: float = CONSTANTS["MAX_SIM_SECONDS"]
 
+#: PCG32 stream layout (ENGINE_SPEC 1.3). Loaded rather than hard-coded so the
+#: two engines cannot drift on a stream index.
+PAX_STREAM: int = int(CONSTANTS["PAX_STREAM"])
+ORDER_STREAM: int = int(CONSTANTS["ORDER_STREAM"])
+DOOR_STREAM_BASE: int = int(CONSTANTS["DOOR_STREAM_BASE"])
+SERVICE_STREAM_BASE: int = int(CONSTANTS["SERVICE_STREAM_BASE"])
+SERVICE_STREAM_STRIDE: int = int(CONSTANTS["SERVICE_STREAM_STRIDE"])
+
+#: Phase offsets within a passenger's service sub-stream block. Each phase is a
+#: separate stream so that a phase whose draw COUNT depends on the boarding
+#: order (bin search, shuffle movements) cannot shift the phases either side of
+#: it. See ENGINE_SPEC 1.3.
+SERVICE_PHASE_STOW = 0
+SERVICE_PHASE_BIN = 1
+SERVICE_PHASE_SHUFFLE = 2
+
 DOOR_ASSIGNMENTS = ("single", "split_by_row", "split_by_aisle")
 OPEN_SEATING_POLICIES = ("aisle_first", "window_first", "front_first", "avoid_neighbours")
 
@@ -106,7 +122,7 @@ class SimConfig:
         "bagKeys", "bagWeights", "partyKeys", "partyWeights",
         "walkSpeedMean", "walkSpeedSd",
         "preboardRate", "slowPaxRate", "slowSpeedFactor", "slowStowFactor", "childRate",
-        "eliteKeys", "eliteWeights",
+        "eliteKeys", "eliteWeights", "eliteForwardBias",
         "stowWeibullShape", "stowWeibullScale", "stowVariability",
         "shuffleMoveMin", "shuffleMoveMode", "shuffleMoveMax",
         "shuffleMovements", "shuffleSamePartyMovements",
@@ -133,6 +149,7 @@ class SimConfig:
         self.bagKeys, self.bagWeights = _numeric_weight_map(r["bagWeights"], "bagWeights")
         self.partyKeys, self.partyWeights = _numeric_weight_map(r["partySizeWeights"], "partySizeWeights")
         self.eliteKeys, self.eliteWeights = _string_weight_map(r["eliteMix"], "eliteMix")
+        self.eliteForwardBias = float(r["eliteForwardBias"])
 
         self.walkSpeedMean = float(r["walkSpeedMean"])
         self.walkSpeedSd = float(r["walkSpeedSd"])
@@ -225,6 +242,12 @@ class SimConfig:
                 raise ConfigError(f"{name} must be a probability in [0, 1], got {v}")
         if self.complianceJitter < 0:
             raise ConfigError("complianceJitter must be non-negative")
+        if not 0.0 <= self.eliteForwardBias <= 1.0:
+            raise ConfigError(
+                "eliteForwardBias must be in [0, 1] -- it is a linear tilt on the "
+                f"eliteMix weights and 1.0 already zeroes the rearmost row, got "
+                f"{self.eliteForwardBias}"
+            )
         for k in ("none", "aisle", "middle", "both"):
             if self.shuffleMovements[k] < 0:
                 raise ConfigError(f"shuffleMovements[{k}] must be non-negative")

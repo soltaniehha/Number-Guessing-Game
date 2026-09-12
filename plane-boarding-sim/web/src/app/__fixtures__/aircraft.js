@@ -26,8 +26,8 @@ const SPECS = [
     ],
   },
   {
-    id: 'b737-8200',
-    name: '737-8200',
+    id: 'b737_max8',
+    name: '737 MAX 8-200',
     manufacturer: 'Boeing',
     description: 'High-density European LCC MAX: 197 seats, single class, both airstairs in use.',
     seatPitchIn: 29,
@@ -42,29 +42,19 @@ const SPECS = [
     ],
   },
   {
-    id: 'b737-800',
-    name: '737-800',
-    manufacturer: 'Boeing',
-    description: 'The open-seating workhorse: 175 seats, one cabin, single jet-bridge.',
-    seatPitchIn: 31,
-    aisleCount: 1,
-    binBagsPerRowSide: 4,
-    cabins: [
-      { id: 'economy', name: 'Cabin', classKey: 'economy', rows: range(1, 30), layout: ['A', 'B', 'C', '|', 'D', 'E', 'F'], pitchIn: 31, exitRows: [15, 16], missingSeats: [] },
-    ],
-    doors: [
-      { id: '1L', name: 'Door 1L (forward)', rowBefore: 1, aisleIndex: 0, kind: 'jetbridge', defaultEnabled: true },
-      { id: '2L', name: 'Door 2L (aft)', rowBefore: null, aisleIndex: 0, kind: 'airstair', defaultEnabled: false },
-    ],
-  },
-  {
     id: 'e175',
     name: 'E175',
     manufacturer: 'Embraer',
     description: 'Regional jet: 2-2 cabin, so nobody is ever more than one seat from the aisle.',
     seatPitchIn: 31,
     aisleCount: 1,
-    binBagsPerRowSide: 2,
+    binBagsPerRowSide: 1,
+    // Mirrors parity/aircraft.json: the regional-jet bag mix. Most roll-aboards
+    // are valet-checked on the airbridge before they ever reach the cabin.
+    defaultConfig: {
+      _comment: 'Regional-jet bag mix; see parity/aircraft.json.',
+      bagWeights: { 0: 0.42, 1: 0.5, 2: 0.08 },
+    },
     cabins: [
       { id: 'first', name: 'First', classKey: 'first', rows: range(1, 3), layout: ['A', '|', 'C', 'D'], pitchIn: 37, exitRows: [], missingSeats: [] },
       { id: 'economy', name: 'Main Cabin', classKey: 'economy', rows: range(4, 20), layout: ['A', 'B', '|', 'C', 'D'], pitchIn: 31, exitRows: [12], missingSeats: [] },
@@ -74,7 +64,7 @@ const SPECS = [
     ],
   },
   {
-    id: 'b777-300er',
+    id: 'b777_300er',
     name: '777-300ER',
     manufacturer: 'Boeing',
     description: 'Twin-aisle long-haul: 3-4-3 economy behind a 1-2-1 business cabin.',

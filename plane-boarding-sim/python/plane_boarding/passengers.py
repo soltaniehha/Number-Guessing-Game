@@ -14,6 +14,12 @@ from .aircraft import Aircraft, Seat
 from .config import SimConfig
 from .rng import PCG32
 
+#: Economy status buckets that concentrate in the FORWARD rows, and the fare
+#: bucket that concentrates in the rear. Anything else in `eliteMix` (i.e.
+#: `standard`) is spatially neutral and keeps its weight at every row.
+STATUS_TIERS = ("elite_top", "elite_mid", "cardholder")
+BASIC_TIER = "basic"
+
 
 class Passenger:
     """One traveller. `__slots__` because a 777 run creates 354 of these per
@@ -161,11 +167,41 @@ def generate(rng: PCG32, ac: Aircraft, cfg: SimConfig) -> List[Passenger]:
 
     # Tiers. A premium cabin *is* the tier; economy passengers draw a status
     # bucket, because that is what the revenue-driven boarding groups sort on.
+    #
+    # The draw is FRONT-BIASED, and that matters more than it looks. Status
+    # flyers are concentrated in the forward economy rows -- Comfort+, Main
+    # Cabin Extra, Economy Plus -- and basic-economy fares get whatever is left,
+    # which is the back. Drawing status uniformly over the cabin would hand
+    # every status-ordered boarding scheme a randomly spread first wave instead
+    # of the front-loaded one it really gets, which is close to the worst
+    # possible order and is exactly what makes real priority boarding slow.
+    # See docs/RESEARCH_AIRLINES.md 7 #6.
+    #
+    # Exactly ONE weighted_pick per economy passenger either way, so the draw
+    # count is unchanged; only the weights handed to it move.
     elite_keys, elite_w = list(cfg.eliteKeys), list(cfg.eliteWeights)
+    bias = cfg.eliteForwardBias
+    n_slots = len(ac.rowSlots)
+    denom = float(n_slots - 1) if n_slots > 1 else 1.0
     for p in pax:
         if p.seat.classKey != "economy":
             p.tier = p.seat.classKey
-        else:
+        elif bias <= 0.0:
             p.tier = rng.weighted_pick(elite_keys, elite_w)
+        else:
+            # +1 at the nose, -1 at the tail, 0 at mid-cabin -- so the tilt
+            # redistributes status forward without changing the cabin-wide mix.
+            fwd = 1.0 - 2.0 * (p.seat.rowSlot / denom)
+            up = 1.0 + bias * fwd
+            down = 1.0 - bias * fwd
+            if up < 0.0:
+                up = 0.0
+            if down < 0.0:
+                down = 0.0
+            tilted = [
+                w * up if k in STATUS_TIERS else (w * down if k == BASIC_TIER else w)
+                for k, w in zip(elite_keys, elite_w)
+            ]
+            p.tier = rng.weighted_pick(elite_keys, tilted)
 
     return pax

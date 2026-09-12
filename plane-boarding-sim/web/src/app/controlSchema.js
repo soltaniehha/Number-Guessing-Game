@@ -6,8 +6,17 @@
  * physical meaning shown under the control — it is the difference between a
  * lab instrument and a form.
  *
- * kind: 'slider' | 'toggle' | 'segmented' | 'weights' | 'seed' | 'aircraft' | 'strategy' | 'doors'
+ * kind: 'slider' | 'nullable-slider' | 'toggle' | 'segmented' | 'weights' | 'seed'
+ *     | 'aircraft' | 'strategy' | 'doors' | 'load-factors'
+ *
+ * Two optional properties gate a control:
+ *   `shell`  — a shell parameter (replications, the sweep), not an engine one,
+ *              so it is not looked for in the engine's DEFAULTS.
+ *   `modes`  — the app modes it applies to. The load-factor sweep only exists
+ *              to feed chart 7, so it is offered in Analytics and Compare and
+ *              nowhere else.
  */
+import { SWEEP_MODES, SWEEP_POINTS, autoSweepRuns } from '../state/sweep.js'
 
 export const SECTIONS = [
   { id: 'scenario', title: 'Scenario', hint: 'What is being boarded, and how' },
@@ -88,6 +97,7 @@ export const CONTROLS = [
     key: 'runs',
     kind: 'slider',
     section: 'scenario',
+    shell: true,
     label: 'Replications',
     min: 10,
     max: 1000,
@@ -95,6 +105,43 @@ export const CONTROLS = [
     format: plain,
     announce: count('replication', 'replications'),
     explain: 'How many independent flights to simulate per strategy in Analytics and Compare.',
+  },
+  {
+    key: 'sweepEnabled',
+    kind: 'toggle',
+    section: 'scenario',
+    shell: true,
+    modes: SWEEP_MODES,
+    // Worded to match chart 7's own empty state, which tells the reader to
+    // "enable Sweep load factor in the Scenario section".
+    label: 'Sweep load factor',
+    explain: 'Also re-run every strategy across a range of load factors, to fill the load-factor sweep chart. It multiplies the work, so it is off by default.',
+  },
+  {
+    key: 'sweepLoadFactors',
+    kind: 'load-factors',
+    section: 'scenario',
+    shell: true,
+    modes: SWEEP_MODES,
+    points: SWEEP_POINTS,
+    label: 'Sweep points',
+    explain: 'How full the aircraft is at each point on the sweep. Each point is a fresh set of replications.',
+  },
+  {
+    key: 'sweepRuns',
+    kind: 'nullable-slider',
+    section: 'scenario',
+    shell: true,
+    modes: SWEEP_MODES,
+    label: 'Replications per sweep point',
+    min: 1,
+    max: 50,
+    step: 1,
+    format: plain,
+    announce: count('replication', 'replications'),
+    autoLabel: 'Auto',
+    autoSpoken: 'derived from the replication count',
+    explain: 'A sweep point needs fewer flights than the main batch. Auto is a quarter of the replications, held between 3 and 12.',
   },
 
   // ------------------------------------------------------------------- doors
@@ -509,6 +556,7 @@ export const CONTROLS = [
     format: plain,
     announce: count('bag', 'bags'),
     autoLabel: 'Use airframe',
+    autoSpoken: 'taken from the airframe',
     explain: 'How many bags fit in the bin above one side of one row. Bin volume is an airframe property; override it to model a retrofit.',
   },
   {
@@ -675,12 +723,32 @@ export const rootKey = (key) => String(key).split('.')[0]
  * for a parameter that no longer exists simply disappears instead of writing
  * dead values into the config.
  */
-export function presentControls(section, defaults) {
+export function presentControls(section, defaults, mode) {
   return CONTROLS.filter((c) => c.section === section).filter((c) => {
+    if (c.modes && mode != null && !c.modes.includes(mode)) return false
     if (c.kind === 'aircraft' || c.kind === 'strategy' || c.kind === 'seed' || c.kind === 'doors') return true
-    if (c.key === 'runs') return true
+    if (c.shell) return true
     return Object.prototype.hasOwnProperty.call(defaults || {}, rootKey(c.key))
   })
+}
+
+/**
+ * The value a nullable control falls back to when it is left on auto.
+ *
+ * Bin capacity inherits from the airframe; sweep replications inherit from the
+ * main replication count, by the worker's own rule. Both are shown, never
+ * merely implied.
+ */
+export function autoValueOf(control, { aircraft, config } = {}) {
+  if (control.key === 'binBagsPerRowSide') return aircraft?.binBagsPerRowSide ?? control.min
+  if (control.key === 'sweepRuns') return autoSweepRuns(config?.runs)
+  return control.min
+}
+
+/** The panel's name for a config key, for messages about it. */
+export function labelForKey(key) {
+  const control = CONTROLS.find((c) => c.key === key || rootKey(c.key) === key)
+  return control ? control.label : key
 }
 
 export const CONTROLS_BY_SECTION = SECTIONS.reduce((acc, s) => {

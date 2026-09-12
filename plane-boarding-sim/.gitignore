@@ -7,3 +7,8 @@ __pycache__/
 *.egg-info/
 .DS_Store
 parity/out/
+
+# The repository root .gitignore is a Python template, and its `lib/` rule would
+# otherwise silently exclude web/src/lib/ -- which holds the engine seam and the
+# URL/config helpers -- leaving a fresh clone unable to build. Re-include it.
+!web/src/lib/

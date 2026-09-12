@@ -96,7 +96,12 @@ describe('control schema', () => {
   it('only offers controls the engine actually has a default for', () => {
     for (const section of SECTIONS) {
       for (const control of presentControls(section.id, engine.DEFAULTS)) {
-        const shell = ['aircraftId', 'strategy', 'seed', 'doors', 'runs'].includes(control.key)
+        // Shell parameters (the aircraft, the strategy, the seed, the doors,
+        // the replication count and the sweep) are the shell's own and are
+        // marked as such in the schema; everything else must be a real engine
+        // parameter.
+        const shell =
+          control.shell || ['aircraftId', 'strategy', 'seed', 'doors'].includes(control.key)
         if (!shell) expect(engine.DEFAULTS).toHaveProperty(rootKey(control.key))
       }
     }

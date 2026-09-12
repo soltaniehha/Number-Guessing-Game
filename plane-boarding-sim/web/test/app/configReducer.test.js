@@ -23,7 +23,7 @@ describe('configReducer', () => {
   })
 
   it('SET_FIELD on aircraftId drops split_by_aisle when the new aircraft has one aisle', () => {
-    const twin = reducer(defaults, { type: 'SET_FIELD', field: 'aircraftId', value: 'b777-300er', aircraft: b777 })
+    const twin = reducer(defaults, { type: 'SET_FIELD', field: 'aircraftId', value: 'b777_300er', aircraft: b777 })
     const withAisleSplit = reducer(twin, { type: 'SET_FIELD', field: 'doorAssignment', value: 'split_by_aisle', aircraft: b777 })
     expect(withAisleSplit.doorAssignment).toBe('split_by_aisle')
     const single = reducer(withAisleSplit, { type: 'SET_FIELD', field: 'aircraftId', value: 'e175', aircraft: e175 })

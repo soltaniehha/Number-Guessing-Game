@@ -35,7 +35,7 @@ export function AnalyticsMode() {
             }
           />
         )}
-        {summary && <SummaryCards summary={summary} />}
+        {summary && <SummaryCards summary={summary} paxCount={batch.result?.meta?.paxCount} />}
         {batch.result && hasChartGrid && (
           <ErrorBoundary label="The chart grid">
             <Suspense fallback={<div className="viewport__loading">Loading charts…</div>}>

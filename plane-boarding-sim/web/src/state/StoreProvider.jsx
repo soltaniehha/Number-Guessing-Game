@@ -10,7 +10,9 @@
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { deepEqual, makeConfigReducer, pickKnown, sanitizeConfig } from './configReducer.js'
-import { buildDefaultConfig } from './configDefaults.js'
+import { aircraftDefaultConfig, airframeChanges, buildDefaultConfig, effectiveDefaults } from './configDefaults.js'
+import { sweepSpecFor } from './sweep.js'
+import { labelForKey } from '../app/controlSchema.js'
 import { readHashConfig, syncHash } from '../lib/urlConfig.js'
 import { PRESET_BY_ID } from '../app/presets.js'
 import { startBatch } from './batchRunner.js'
@@ -90,11 +92,15 @@ export function StoreProvider({ engine, children }) {
 
   const [config, rawDispatch] = useReducer(reducer, defaults, (base) => {
     const fromHash = readHashConfig()
-    if (!fromHash) return base
+    const id = (fromHash && fromHash.aircraftId) || base.aircraftId
+    // The airframe's own defaults sit between the base defaults and anything
+    // the link asks for, exactly as the engine layers them.
+    const start = effectiveDefaults(base, engine.resolveAircraft(id))
+    if (!fromHash) return sanitizeConfig(start, engine.resolveAircraft(id), base)
     // A link is untrusted input like any other: it goes through the same
     // pickKnown gate as LOAD_CONFIG and APPLY_PRESET, or an arbitrary key
     // would survive into the config and be re-encoded into the next link.
-    const merged = { ...base, ...pickKnown(fromHash, base) }
+    const merged = { ...start, ...pickKnown(fromHash, base) }
     return sanitizeConfig(merged, engine.resolveAircraft(merged.aircraftId), base)
   })
 
@@ -109,6 +115,12 @@ export function StoreProvider({ engine, children }) {
   )
   const [toast, setToast] = useState(null)
   const [modal, setModal] = useState(null)
+  /**
+   * Which controls the airframe just wrote, so the panel can say so in place.
+   * `{ aircraftName, keys: [...] }` — cleared key by key as the user takes
+   * each value back over.
+   */
+  const [airframeNote, setAirframeNote] = useState(null)
 
   const [replay, setReplay] = useState(null)
   const [replayConfig, setReplayConfig] = useState(null)
@@ -136,14 +148,30 @@ export function StoreProvider({ engine, children }) {
 
   const setField = useCallback(
     (field, value) => {
-      rawDispatch({
-        type: 'SET_FIELD',
-        field,
-        value,
-        aircraft: field === 'aircraftId' ? engine.resolveAircraft(value) : aircraft,
+      if (field === 'aircraftId') {
+        const target = engine.resolveAircraft(value)
+        // Same pure calculation the reducer runs, so what the toast names and
+        // what the config gets cannot disagree.
+        const changes = airframeChanges(config, defaults, aircraft, target)
+        rawDispatch({ type: 'SET_FIELD', field, value, aircraft: target, prevAircraft: aircraft })
+        if (changes.length) {
+          const keys = changes.map((c) => c.key)
+          setAirframeNote({ aircraftName: target?.name || value, keys })
+          setToast({ kind: 'ok', text: `${target?.name || value} defaults applied: ${keys.map(labelForKey).join(', ')}` })
+        } else {
+          setAirframeNote(null)
+        }
+        return
+      }
+      // Taking a value back over retires the airframe's claim on it.
+      setAirframeNote((note) => {
+        if (!note || !note.keys.includes(field)) return note
+        const keys = note.keys.filter((k) => k !== field)
+        return keys.length ? { ...note, keys } : null
       })
+      rawDispatch({ type: 'SET_FIELD', field, value, aircraft })
     },
-    [engine, aircraft],
+    [engine, aircraft, config, defaults],
   )
 
   const toggleDoor = useCallback((doorId) => rawDispatch({ type: 'TOGGLE_DOOR', doorId, aircraft }), [aircraft])
@@ -151,6 +179,7 @@ export function StoreProvider({ engine, children }) {
   const loadConfig = useCallback(
     (partial) => {
       const target = engine.resolveAircraft(partial?.aircraftId || config.aircraftId)
+      setAirframeNote(null)
       rawDispatch({ type: 'LOAD_CONFIG', config: partial, aircraft: target })
     },
     [engine, config.aircraftId],
@@ -162,12 +191,21 @@ export function StoreProvider({ engine, children }) {
       if (!preset) return
       const target = engine.resolveAircraft(preset.patch.aircraftId || config.aircraftId)
       rawDispatch({ type: 'APPLY_PRESET', patch: preset.patch, aircraft: target })
+      // A preset states some parameters explicitly; the rest come from the
+      // airframe it names. Only the latter are the airframe's doing.
+      const fromAirframe = Object.keys(aircraftDefaultConfig(target, defaults)).filter(
+        (key) => !Object.prototype.hasOwnProperty.call(preset.patch, key) && !deepEqual(defaults[key], target?.defaultConfig?.[key]),
+      )
+      setAirframeNote(fromAirframe.length ? { aircraftName: target?.name || target?.id, keys: fromAirframe } : null)
       setToast({ kind: 'ok', text: `Loaded preset: ${preset.name}` })
     },
-    [engine, config.aircraftId],
+    [engine, config.aircraftId, defaults],
   )
 
-  const reset = useCallback(() => rawDispatch({ type: 'RESET' }), [])
+  const reset = useCallback(() => {
+    setAirframeNote(null)
+    rawDispatch({ type: 'RESET', aircraft: engine.resolveAircraft(defaults.aircraftId) })
+  }, [engine, defaults.aircraftId])
 
   const randomiseSeed = useCallback(() => {
     const next = Math.floor(Math.random() * 1_000_000_000)
@@ -201,15 +239,21 @@ export function StoreProvider({ engine, children }) {
   }, [engine, config])
 
   const runBatch = useCallback(
-    (strategies) => {
+    (strategies, options) => {
       batchHandle.current?.stop()
       const list = strategies && strategies.length ? strategies : [config.strategy]
-      setBatch({ running: true, done: 0, total: list.length * config.runs, result: null, error: null })
+      // Chart 7 only gets data if somebody asks for it. The sweep is part of
+      // the same job list, so it is part of the total the progress bar divides
+      // by — otherwise the bar sits at 100% for the whole second axis.
+      const sweep = options?.sweep === undefined ? sweepSpecFor(config, mode) : options.sweep
+      const sweepTotal = sweep ? list.length * sweep.loadFactors.length * sweep.runs : 0
+      setBatch({ running: true, done: 0, total: list.length * config.runs + sweepTotal, result: null, error: null })
       batchHandle.current = startBatch({
         engine,
         config,
         strategies: list,
         runs: config.runs,
+        sweep,
         names: engine.STRATEGIES,
         onProgress: ({ done, total, partial }) => setBatch((b) => ({ ...b, done, total, result: partial ?? b.result })),
         onDone: (result) => {
@@ -222,7 +266,7 @@ export function StoreProvider({ engine, children }) {
         },
       })
     },
-    [engine, config],
+    [engine, config, mode],
   )
 
   const run = useCallback(() => {
@@ -261,6 +305,7 @@ export function StoreProvider({ engine, children }) {
       toggleSection,
       toast,
       setToast,
+      airframeNote,
       modal,
       setModal,
       replay,
@@ -275,7 +320,7 @@ export function StoreProvider({ engine, children }) {
     }),
     [
       engine, defaults, config, aircraft, strategy, setField, toggleDoor, loadConfig, applyPreset, reset,
-      randomiseSeed, mode, theme, toggleTheme, drawerOpen, openSections, toggleSection, toast, modal,
+      randomiseSeed, mode, theme, toggleTheme, drawerOpen, openSections, toggleSection, toast, modal, airframeNote,
       replay, replayConfig, runError, busy, run, batch, runBatch, stopBatch,
     ],
   )

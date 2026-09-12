@@ -50,7 +50,10 @@ class RunResult:
         "paxCount", "seatCount", "loadFactor", "doors",
         "seatedCurve", "aisleOccupancy", "congestion", "perPassenger",
         "timeBreakdown", "interference", "gateChecks", "binSearches",
-        "aisleBlockEvents", "p50TimeToSeat", "p90TimeToSeat", "maxTimeToSeat",
+        "aisleBlockEvents",
+        "p50AisleSeconds", "p90AisleSeconds", "maxAisleSeconds",
+        "p50BoardingWaitSeconds", "p90BoardingWaitSeconds",
+        "p50TimeToSeat", "p90TimeToSeat", "maxTimeToSeat",
         "throughputPaxPerMin", "completed", "doorStats", "doorSequencing",
     )
 
@@ -82,6 +85,11 @@ class RunResult:
             "gateChecks": self.gateChecks,
             "binSearches": self.binSearches,
             "aisleBlockEvents": self.aisleBlockEvents,
+            "p50AisleSeconds": self.p50AisleSeconds,
+            "p90AisleSeconds": self.p90AisleSeconds,
+            "maxAisleSeconds": self.maxAisleSeconds,
+            "p50BoardingWaitSeconds": self.p50BoardingWaitSeconds,
+            "p90BoardingWaitSeconds": self.p90BoardingWaitSeconds,
             "p50TimeToSeat": self.p50TimeToSeat,
             "p90TimeToSeat": self.p90TimeToSeat,
             "maxTimeToSeat": self.maxTimeToSeat,
@@ -149,17 +157,24 @@ class PairedDifference:
     samples are correlated, so the independent-samples formula you would apply
     by eye to two marginal error bars does not hold in either direction.
 
-    It is usually tighter too, but be accurate about how much. Our CRN is
-    PARTIAL: the `pax` stream is shared, so the manifest is identical, but the
-    `sim` stream (stow, shuffle and door draws) is consumed in event order,
-    which differs by strategy -- so the same passenger gets a different stow
-    time under a different boarding order. Measured on a320neo/1L/180 pax at 30
-    replications, the paired interval runs 8-27% narrower than the unpaired one
-    for strategies close to the baseline, and can be a few percent WIDER for one
-    that diverges strongly (back-to-front), where the residual correlation is
-    near zero. Making the `sim` draws per-passenger rather than per-event would
-    give a much stronger reduction; it also changes draw order, so it is a
-    cross-engine change and not a free one.
+    It is also much tighter, because the CRN is now COMPLETE rather than
+    partial. Every service draw comes from a sub-stream keyed on the passenger
+    (or, for door arrivals, on the door and the release index) instead of from a
+    single event-ordered stream, so the same passenger draws the same stow time,
+    the same shuffle movements and the same bin behaviour whenever they board,
+    and the k-th arrival at a door waits the same gap under every strategy.
+    See ENGINE_SPEC 1.3.
+
+    What remains order-dependent is order-dependent in the world, not in the
+    generator: how full the bin above your row is when you reach it, and how
+    many people you have to climb over, both genuinely depend on who boarded
+    first. Those are the effect being measured, not noise to be cancelled.
+
+    Measured on a320neo/1L/180 pax at 30 replications, the paired interval now
+    runs an order of magnitude narrower than the unpaired one, and it is
+    narrower for every strategy including the ones that diverge hardest from the
+    baseline -- which was not true of the old event-ordered scheme, where
+    back-to-front could pair WIDER than it paired unpaired.
 
     Sign convention: negative means `a` is FASTER than `b`.
 

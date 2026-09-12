@@ -4,7 +4,8 @@
  */
 import { useStore } from '../state/StoreProvider.jsx'
 import { relevanceOf, optionRelevance } from '../state/relevance.js'
-import { SECTIONS, presentControls, rootKey } from './controlSchema.js'
+import { describeBatchCost, describeSweepCost, runCounts, sweepSpecFor } from '../state/sweep.js'
+import { SECTIONS, autoValueOf, presentControls, rootKey } from './controlSchema.js'
 import { getPath, setPath } from '../lib/path.js'
 import { Section } from './Section.jsx'
 import { Slider } from './controls/Slider.jsx'
@@ -15,12 +16,13 @@ import { WeightSet } from './controls/WeightSet.jsx'
 import { SeedField } from './controls/SeedField.jsx'
 import { DoorPicker } from './controls/DoorPicker.jsx'
 import { AircraftPicker } from './controls/AircraftPicker.jsx'
+import { LoadFactorSet } from './controls/LoadFactorSet.jsx'
 import { StrategyPicker } from './controls/StrategyPicker.jsx'
 import { PresetSection } from './PresetSection.jsx'
 
 export function ControlPanel() {
   const store = useStore()
-  const { config, defaults, aircraft, openSections, toggleSection } = store
+  const { config, defaults, aircraft, mode, openSections, toggleSection } = store
 
   return (
     <div className="panel">
@@ -40,7 +42,7 @@ export function ControlPanel() {
               </Section>
             )
           }
-          const controls = presentControls(section.id, defaults)
+          const controls = presentControls(section.id, defaults, mode)
           if (controls.length === 0) return null
           return (
             <Section
@@ -55,6 +57,7 @@ export function ControlPanel() {
               {controls.map((control) => (
                 <Control key={control.key} control={control} store={store} />
               ))}
+              {section.id === 'scenario' && mode !== 'cabin' && <RunCost store={store} />}
             </Section>
           )
         })}
@@ -77,12 +80,47 @@ function sectionBadge(sectionId, config, aircraft) {
   }
 }
 
+/**
+ * What pressing Run will actually cost, before it is pressed.
+ *
+ * A sweep is a second axis on an already-large batch, so the arithmetic is
+ * spelled out rather than discovered halfway through a five-minute run.
+ */
+function RunCost({ store }) {
+  const { config, mode } = store
+  const list = mode === 'compare' ? config.compareStrategies || [] : [config.strategy]
+  const sweep = sweepSpecFor(config, mode)
+  const counts = runCounts({ strategies: list.length, runs: config.runs, sweep })
+  return (
+    <div className="runcost" role="note" aria-label="Run size">
+      <p className="runcost__line num">{describeBatchCost(counts)}</p>
+      {sweep && <p className="runcost__line num">{describeSweepCost(counts)}</p>}
+      {sweep && (
+        <p className="runcost__total num">
+          {counts.total.toLocaleString('en-GB')} runs in total
+        </p>
+      )}
+    </div>
+  )
+}
+
+/** "The airframe just set this for you", said where the value changed. */
+function AirframeNote({ note, controlKey }) {
+  if (!note || !note.keys.includes(controlKey)) return null
+  return (
+    <p className="field__help field__help--airframe" role="note">
+      Set by the {note.aircraftName}. Change it and it stays changed.
+    </p>
+  )
+}
+
 function Control({ control, store }) {
-  const { config, aircraft, setField, toggleDoor, randomiseSeed, strategies, aircraftList } = store
+  const { config, aircraft, setField, toggleDoor, randomiseSeed, strategies, aircraftList, airframeNote } = store
   const id = `ctl-${control.key.replace(/\./g, '-')}`
   const value = getPath(config, control.key)
   const { relevant, reason } = relevanceOf(control.key, config, aircraft)
   const disabled = !relevant
+  const note = <AirframeNote note={airframeNote} controlKey={rootKey(control.key)} />
 
   // Dotted keys write back through the nested object they belong to.
   const commit = (next) => {
@@ -172,13 +210,30 @@ function Control({ control, store }) {
 
     case 'weights':
       return (
-        <WeightSet
+        <>
+          <WeightSet
+            id={id}
+            label={control.label}
+            explain={control.explain}
+            value={value}
+            keys={control.keys}
+            keyLabels={control.keyLabels}
+            disabled={disabled}
+            reason={reason}
+            onChange={commit}
+          />
+          {note}
+        </>
+      )
+
+    case 'load-factors':
+      return (
+        <LoadFactorSet
           id={id}
           label={control.label}
           explain={control.explain}
           value={value}
-          keys={control.keys}
-          keyLabels={control.keyLabels}
+          points={control.points}
           disabled={disabled}
           reason={reason}
           onChange={commit}
@@ -192,8 +247,9 @@ function Control({ control, store }) {
           label={control.label}
           explain={control.explain}
           value={value}
-          autoValue={aircraft?.binBagsPerRowSide ?? control.min}
+          autoValue={autoValueOf(control, { aircraft, config })}
           autoLabel={control.autoLabel}
+          autoSpoken={control.autoSpoken}
           min={control.min}
           max={control.max}
           step={control.step}
@@ -208,20 +264,23 @@ function Control({ control, store }) {
     case 'slider':
     default:
       return (
-        <Slider
-          id={id}
-          label={control.label}
-          explain={control.explain}
-          value={value}
-          min={control.min}
-          max={control.max}
-          step={control.step}
-          format={control.format}
-          announce={control.announce}
-          disabled={disabled}
-          reason={reason}
-          onChange={commit}
-        />
+        <>
+          <Slider
+            id={id}
+            label={control.label}
+            explain={control.explain}
+            value={value}
+            min={control.min}
+            max={control.max}
+            step={control.step}
+            format={control.format}
+            announce={control.announce}
+            disabled={disabled}
+            reason={reason}
+            onChange={commit}
+          />
+          {note}
+        </>
       )
   }
 }
