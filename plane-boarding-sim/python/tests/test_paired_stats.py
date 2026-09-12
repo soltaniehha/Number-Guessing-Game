@@ -13,8 +13,10 @@ import pytest
 
 from plane_boarding.batch import compare_strategies, run_batch
 from plane_boarding.cli import shared_ranks, shared_ranks_paired
+from plane_boarding.config import DOOR_STREAM_BASE, ticks_for
 from plane_boarding.engine import simulate
 from plane_boarding.metrics import Aggregate, PairedDifference
+from plane_boarding.rng import PCG32
 
 from helpers import cfg_for
 
@@ -155,49 +157,127 @@ def test_paired_block_is_attached_and_json_shaped():
     json.dumps(d)
 
 
-def test_common_random_numbers_are_only_partial_and_this_is_documented():
-    """Pins the current strength of CRN so nobody over-claims it.
+def test_common_random_numbers_are_complete_and_the_residual_is_documented():
+    """Pins the strength of CRN so nobody over- or under-claims it.
 
-    The `pax` stream is shared, so the manifest is identical across strategies
-    at a matched seed. The `sim` stream is NOT: stow, shuffle and door draws are
-    consumed in event order, so the same passenger gets a different stow time
-    under a different boarding order. That is why the variance reduction is
-    8-27% rather than the near-total cancellation you would get from
-    per-passenger service draws.
+    This test used to be called `..._are_only_partial_and_this_is_documented`
+    and it recorded the opposite finding: the `sim` stream was consumed in EVENT
+    order, so the same passenger drew a different stow time under a different
+    boarding order and only 32 of 167 passengers matched across two strategies.
+    It instructed whoever implemented per-passenger draws to update the figures
+    rather than delete the test. This is that update.
 
-    If someone later makes the `sim` draws per-passenger -- a cross-engine
-    change, since it moves draw order -- this test should start failing and
-    should be updated, not deleted.
+    Service draws now come from sub-streams keyed on the PASSENGER
+    (ENGINE_SPEC 1.3), so:
+
+    * the manifest is still shared -- that was always true;
+    * the raw stow draw is now IDENTICAL for every passenger, which the
+      zero-congestion case below proves at 100%;
+    * under shipped defaults the observed match rate is about two thirds, and
+      the third that differs is not RNG bookkeeping. It is bin congestion: the
+      stow duration is `base * multiplier * (1 + w * fill^2)` and `fill` -- how
+      full the bin above your row already is when you reach it -- genuinely
+      depends on who boarded before you. That is the effect being measured, not
+      noise to be cancelled.
     """
     cfg = cfg_for("a320neo", "random", seed=5, loadFactor=0.9, doors=["1L"])
     a = simulate(cfg.replace(strategy="random"))
     b = simulate(cfg.replace(strategy="wilma"))
     bags_a = {p.id: p.bags for p in a.perPassenger}
     bags_b = {p.id: p.bags for p in b.perPassenger}
+    assert bags_a == bags_b, "the manifest MUST be shared -- that is strong CRN"
+
     stow_a = {p.id: p.stowTime for p in a.perPassenger}
     stow_b = {p.id: p.stowTime for p in b.perPassenger}
-
-    assert bags_a == bags_b, "the manifest MUST be shared -- that is strong CRN"
     shared_stow = sum(1 for i in stow_a if abs(stow_a[i] - stow_b[i]) < 1e-9)
-    assert shared_stow < len(stow_a) // 2, (
-        "service draws now appear to follow the passenger rather than the event "
-        "order -- CRN got stronger, so update this test and the variance-reduction "
-        "figures in PairedDifference's docstring")
+    # Recorded figure at the time of writing: 119/180 (66%). Was 32/167 (19%)
+    # under the old event-ordered stream. The band is wide because the exact
+    # count depends on the bin congestion pattern, which is physics.
+    assert shared_stow >= len(stow_a) * 0.55, (
+        f"only {shared_stow}/{len(stow_a)} passengers kept their stow time across "
+        f"a change of boarding order. Per-passenger service streams should hold "
+        f"this around two thirds; a collapse means a service draw has gone back "
+        f"to being consumed in event order")
+
+    # The clean proof, with the one genuine physical coupling removed: no bin
+    # congestion term and bins roomy enough that nobody searches or gate-checks,
+    # so stow time is exactly `base * multiplier` and must match for EVERYBODY.
+    clean = cfg.replace(binCongestionWeight=0.0, binBagsPerRowSide=9)
+    ca = simulate(clean.replace(strategy="random"))
+    cb = simulate(clean.replace(strategy="front_to_back"))
+    ca_stow = {p.id: p.stowTime for p in ca.perPassenger}
+    cb_stow = {p.id: p.stowTime for p in cb.perPassenger}
+    assert ca_stow == cb_stow, (
+        "with bin congestion removed a passenger's stow time is a pure draw from "
+        "their own sub-stream, so it must be identical under every boarding "
+        "order. If this fails, the service draws are order-dependent again")
 
 
-def test_pairing_can_be_wider_than_unpaired_and_that_is_still_correct():
-    """For a strategy whose service draws diverge strongly from the baseline's,
-    the residual correlation is near zero and the paired interval can come out
-    slightly wider. That is not a bug: with correlated samples the unpaired
-    formula is invalid in both directions, and the paired one is the answer
-    either way. Asserted so the property is understood rather than 'fixed'."""
+def test_the_door_arrival_schedule_comes_from_a_per_door_stream():
+    """The other half of complete CRN, and the one that is easy to forget.
+
+    Door arrivals are a property of the DOOR, not of the passenger: the k-th
+    person to reach a given door waits the k-th drawn gap. Each door owns its
+    own stream, so that drawn schedule is reconstructible from the seed alone
+    and is the same under every strategy -- which means the whole jetbridge
+    arrival process cancels in a paired comparison instead of contributing noise
+    to it.
+
+    Tested against a reconstruction rather than by comparing two strategies to
+    each other, because the REALISED entry times are allowed to slip later than
+    the drawn ones: a passenger cannot step through a doorway that still has
+    somebody standing in it, and how often that happens does depend on the
+    boarding order. The scenario below is deliberately uncongested -- 56
+    passengers, one door, a 60 s mean gap -- so the slip is bounded at a couple
+    of ticks and the drawn schedule shows through.
+    """
+    cfg = cfg_for("a320neo", "random", seed=6, loadFactor=0.3, doors=["1L"],
+                  doorArrivalMean=60.0)
+    n = simulate(cfg).paxCount
+
+    rng = PCG32(cfg.seed, DOOR_STREAM_BASE + 0)
+    tick, scheduled = 0, []
+    for _ in range(n):
+        scheduled.append(round(tick * cfg.dt, 6))
+        tick += ticks_for(rng.exponential(cfg.doorArrivalMean), cfg.dt)
+
+    for strategy in ("random", "wilma", "front_to_back", "southwest_2026", "by_bags"):
+        r = simulate(cfg.replace(strategy=strategy))
+        assert r.completed, "the scenario must finish or the comparison is meaningless"
+        entries = sorted(round(p.enterTime, 6) for p in r.perPassenger)
+        for k, (actual, want) in enumerate(zip(entries, scheduled)):
+            assert actual >= want - 1e-9, (
+                f"{strategy}: arrival {k} at {actual}s is EARLIER than the drawn "
+                f"schedule {want}s -- the door stream is not being consumed once "
+                f"per release")
+            assert actual - want <= 2.0, (
+                f"{strategy}: arrival {k} slipped {actual - want:.1f}s past the "
+                f"drawn schedule {want}s. In an uncongested cabin the only "
+                f"permitted slip is waiting for the doorway to clear, which is a "
+                f"fraction of a second; a large slip means the door draws have "
+                f"gone back to being shared between doors or consumed in event "
+                f"order")
+
+
+def test_pairing_now_helps_even_for_a_strategy_that_diverges_hard():
+    """This test used to assert the opposite, and the change is the point.
+
+    Under the old event-ordered `sim` stream, a strategy whose service draws
+    diverged strongly from the baseline's had near-zero residual correlation and
+    its paired interval could come out slightly WIDER than the unpaired one --
+    correct, but a sign that CRN was buying nothing there. With per-passenger
+    service streams the correlation survives the divergence, so back-to-front --
+    about as far from `random` as an ordering gets -- now pairs strictly
+    narrower like everything else.
+    """
     cfg = cfg_for("a320neo", "random", seed=1, loadFactor=0.9, doors=["1L"])
     res = compare_strategies(cfg, ["random", "back_to_front"], runs=25)
     b2f = next(b for b in res if b.strategy == "back_to_front")
     base = next(b for b in res if b.strategy == "random")
     paired = b2f.paired_against(base)
     unpaired = unpaired_ci(b2f.totalSeconds.values, base.totalSeconds.values)
-    assert paired.ci95 == pytest.approx(unpaired, rel=0.35), (
-        "paired and unpaired should be in the same ballpark here; a large gap "
-        "either way means the correlation structure changed")
+    assert paired.ci95 < unpaired, (
+        f"paired CI {paired.ci95:.1f}s is not narrower than unpaired {unpaired:.1f}s "
+        f"even for back-to-front -- the CRN has stopped reaching the strategies "
+        f"that diverge from the baseline, which is exactly the case it exists for")
     assert paired.significant, "back-to-front is genuinely slower than random"

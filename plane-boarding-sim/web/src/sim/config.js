@@ -38,6 +38,22 @@ export const MIN_SPEED_FRACTION = CONSTANTS.MIN_SPEED_FRACTION
 export const INCH = CONSTANTS.INCH
 export const MAX_SIM_SECONDS = CONSTANTS.MAX_SIM_SECONDS
 
+// PCG32 stream layout (ENGINE_SPEC 1.3). Loaded rather than hard-coded so the
+// two engines cannot drift on a stream index.
+export const PAX_STREAM = Math.trunc(CONSTANTS.PAX_STREAM)
+export const ORDER_STREAM = Math.trunc(CONSTANTS.ORDER_STREAM)
+export const DOOR_STREAM_BASE = Math.trunc(CONSTANTS.DOOR_STREAM_BASE)
+export const SERVICE_STREAM_BASE = Math.trunc(CONSTANTS.SERVICE_STREAM_BASE)
+export const SERVICE_STREAM_STRIDE = Math.trunc(CONSTANTS.SERVICE_STREAM_STRIDE)
+
+// Phase offsets within a passenger's sub-stream block. Each phase is a separate
+// stream so that a phase whose draw COUNT depends on the boarding order (bin
+// search, shuffle movements) cannot shift the phases either side of it.
+export const SERVICE_PHASE_STOW = 0
+export const SERVICE_PHASE_BIN = 1
+export const SERVICE_PHASE_SHUFFLE = 2
+export const SERVICE_PHASE_BEHAVIOUR = 3
+
 export const DOOR_ASSIGNMENTS = ['single', 'split_by_row', 'split_by_aisle']
 export const OPEN_SEATING_POLICIES = ['aisle_first', 'window_first', 'front_first', 'avoid_neighbours']
 
@@ -124,6 +140,7 @@ export class SimConfig {
     const [eliteKeys, eliteWeights] = stringWeightMap(r.eliteMix, 'eliteMix')
     this.eliteKeys = eliteKeys
     this.eliteWeights = eliteWeights
+    this.eliteForwardBias = Number(r.eliteForwardBias)
 
     this.walkSpeedMean = Number(r.walkSpeedMean)
     this.walkSpeedSd = Number(r.walkSpeedSd)
@@ -226,6 +243,12 @@ export class SimConfig {
       }
     }
     if (this.complianceJitter < 0) throw new ConfigError('complianceJitter must be non-negative')
+    if (!(this.eliteForwardBias >= 0.0 && this.eliteForwardBias <= 1.0)) {
+      throw new ConfigError(
+        'eliteForwardBias must be in [0, 1] -- it is a linear tilt on the eliteMix ' +
+          `weights and 1.0 already zeroes the rearmost row, got ${this.eliteForwardBias}`,
+      )
+    }
     for (const k of ['none', 'aisle', 'middle', 'both']) {
       if (this.shuffleMovements[k] < 0) {
         throw new ConfigError(`shuffleMovements[${k}] must be non-negative`)

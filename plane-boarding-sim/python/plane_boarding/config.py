@@ -66,6 +66,7 @@ SERVICE_STREAM_STRIDE: int = int(CONSTANTS["SERVICE_STREAM_STRIDE"])
 SERVICE_PHASE_STOW = 0
 SERVICE_PHASE_BIN = 1
 SERVICE_PHASE_SHUFFLE = 2
+SERVICE_PHASE_BEHAVIOUR = 3
 
 DOOR_ASSIGNMENTS = ("single", "split_by_row", "split_by_aisle")
 OPEN_SEATING_POLICIES = ("aisle_first", "window_first", "front_first", "avoid_neighbours")

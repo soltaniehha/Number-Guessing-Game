@@ -2,7 +2,8 @@
 
     python3 -m plane_boarding.cli run     --aircraft a320neo --strategy wilma
     python3 -m plane_boarding.cli compare --aircraft a320neo --runs 20
-    python3 -m plane_boarding.cli sweep   --aircraft a320neo --strategy random wilma
+    python3 -m plane_boarding.cli sweep   --aircraft a320neo --strategies random wilma
+    python3 -m plane_boarding.cli sweep   --param preboardRate --strategies wilma
     python3 -m plane_boarding.cli export  --aircraft b777_300er --replay out.json
 
 The text output is meant to be read, not parsed: aligned columns, a bar chart of
@@ -19,7 +20,7 @@ import sys
 from typing import Any, Dict, List, Optional, Sequence
 
 from .aircraft import aircraft_ids, geometry_payload, get_aircraft
-from .batch import compare_strategies, load_sweep, run_batch
+from .batch import SWEEPABLE, compare_strategies, param_sweep, run_batch
 from .config import ConfigError, SimConfig, build_config, expected_bags_per_pax
 from .engine import run as engine_run
 from .metrics import PairedDifference, RunResult
@@ -164,8 +165,11 @@ def _print_run(cfg: SimConfig, ac, r: RunResult) -> None:
     if not r.completed:
         print("  ** did not complete within MAX_SIM_SECONDS **")
     print()
-    print(f"  time to seat    median {_fmt_mmss(r.p50TimeToSeat)}   "
-          f"p90 {_fmt_mmss(r.p90TimeToSeat)}   worst {_fmt_mmss(r.maxTimeToSeat)}")
+    print(f"  door to seat    median {_fmt_mmss(r.p50AisleSeconds)}   "
+          f"p90 {_fmt_mmss(r.p90AisleSeconds)}   worst {_fmt_mmss(r.maxAisleSeconds)}")
+    print(f"  doors-open to seat (incl. jetbridge queue)   "
+          f"median {_fmt_mmss(r.p50BoardingWaitSeconds)}   "
+          f"p90 {_fmt_mmss(r.p90BoardingWaitSeconds)}")
     print()
 
     tb = r.timeBreakdown
@@ -304,35 +308,56 @@ def cmd_compare(args: argparse.Namespace) -> int:
 # sweep
 # ---------------------------------------------------------------------------
 
+#: Default sweep points per parameter. `preboardRate` deliberately runs out to
+#: a third of the cabin: that is the leisure-route figure, and the interesting
+#: part of the curve is above 15% where preboarding takes over as the binding
+#: constraint (RESEARCH_AIRLINES 3.2, 7 #9).
+_SWEEP_DEFAULTS = {
+    "loadFactor": [0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    "preboardRate": [0.0, 0.025, 0.05, 0.10, 0.15, 0.20, 0.25, 0.33],
+    "nonComplianceRate": [0.0, 0.05, 0.15, 0.30, 0.50],
+    "lateRate": [0.0, 0.01, 0.05, 0.10, 0.20],
+    "stowPassSpeedFactor": [0.0, 0.2, 0.3, 0.4, 0.6],
+    "binCongestionWeight": [0.0, 0.25, 0.45, 0.75, 1.0],
+    "eliteForwardBias": [0.0, 0.25, 0.5, 0.75, 1.0],
+    "zoneCount": [2, 3, 4, 5, 6],
+}
+
+
 def cmd_sweep(args: argparse.Namespace) -> int:
     cfg = _make_config(args, strategy="random")
     ac = get_aircraft(cfg.aircraftId)
     keys = args.strategies or ["random"]
-    lfs = args.factors or [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+    param = args.param
+    values = args.factors or _SWEEP_DEFAULTS[param]
 
-    def progress(key: str, lf: float, i: int, total: int) -> None:
+    def progress(key: str, v: float, i: int, total: int) -> None:
         if not args.quiet:
-            sys.stderr.write(f"\r  {key:<18s} load {lf:.2f}  {i}/{total}   ")
+            sys.stderr.write(f"\r  {key:<18s} {param} {v:.3f}  {i}/{total}   ")
             sys.stderr.flush()
 
-    series = load_sweep(cfg, lfs, keys, runs=args.runs, progress=progress)
+    series = param_sweep(cfg, param, values, keys, runs=args.runs, progress=progress)
     if not args.quiet:
         sys.stderr.write("\r" + " " * 60 + "\r")
 
     allmax = max(b.mean for s in series.values() for b in s)
     print()
     print("=" * 88)
-    print(f" {ac.name}  —  boarding time vs seat load factor "
+    print(f" {ac.name}  —  boarding time vs {SWEEPABLE[param]} "
           f"({args.runs} replications per point)")
-    print(" Schultz finds this relationship is LINEAR for both one- and two-door "
-          "boarding; a bend means something is saturating.")
+    if param == "loadFactor":
+        print(" Schultz finds this relationship is LINEAR for both one- and two-door "
+              "boarding; a bend means something is saturating.")
+    elif param == "preboardRate":
+        print(" Watch for the knee: above roughly 15% the preboard block, not the "
+              "boarding order, is what sets the time.")
     print("=" * 88)
     for key, rows in series.items():
         print(f"\n  {STRATEGIES[key]['name']}")
-        print(f"    {'load':>5s} {'pax':>5s} {'mean':>7s} {'s/pax':>6s}  ")
-        for b in rows:
+        print(f"    {param[:9]:>9s} {'pax':>5s} {'mean':>7s} {'s/pax':>6s}  ")
+        for v, b in zip(values, rows):
             spp = b.mean / b.paxCount if b.paxCount else 0.0
-            print(f"    {b.loadFactor:5.2f} {b.paxCount:5d} {_fmt_mmss(b.mean):>7s} "
+            print(f"    {v:9.3f} {b.paxCount:5d} {_fmt_mmss(b.mean):>7s} "
                   f"{spp:6.2f}  {_bar(b.mean, allmax, 30)}")
     print("=" * 88)
     return 0
@@ -404,11 +429,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--strategies", nargs="+", default=None, choices=list(STRATEGIES))
     sp.set_defaults(func=cmd_compare)
 
-    sp = sub.add_parser("sweep", help="boarding time vs load factor")
+    sp = sub.add_parser("sweep", help="boarding time vs a swept scenario parameter")
     common(sp)
     sp.add_argument("--runs", "-n", type=int, default=10)
     sp.add_argument("--strategies", nargs="+", default=None, choices=list(STRATEGIES))
-    sp.add_argument("--factors", "-f", nargs="+", type=float, default=None)
+    sp.add_argument("--param", "-p", default="loadFactor", choices=sorted(SWEEPABLE),
+                    help="which scenario parameter to sweep (default: loadFactor)")
+    sp.add_argument("--factors", "-f", nargs="+", type=float, default=None,
+                    metavar="VALUE", help="sweep points; defaults per parameter")
     sp.set_defaults(func=cmd_sweep)
 
     sp = sub.add_parser("export", help="dump JSON")

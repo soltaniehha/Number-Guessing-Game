@@ -130,16 +130,81 @@ All are defined in terms of `next_uint32()`.
 
 ### 1.3 Stream separation
 
-A run uses **three independent PCG32 streams**, all seeded from the run seed so
-that changing one phase does not perturb another:
+A run uses **many independent PCG32 streams**, all seeded from the run seed so
+that changing one phase does not perturb another. The stream indices live in
+`parity/defaults.json` under `_constants`, so neither engine can drift on them.
 
-| Stream | `initseq` | Used for |
+| Stream `initseq` | Name | Used for |
 |---|---|---|
-| `pax`   | 1 | Passenger generation: who shows up, parties, bags, speeds, per-passenger time multipliers |
-| `order` | 2 | Boarding-order construction: shuffles within groups, non-compliance, open-seating choices |
-| `sim`   | 3 | Runtime draws: stow duration, shuffle duration, gate-scan intervals, bin search |
+| 1 | `pax` | Passenger generation: who shows up, parties, bags, speeds, per-passenger time multipliers, status tier |
+| 2 | `order` | Boarding-order construction: shuffles within groups |
+| 3 | *retired* | Was the single event-ordered `sim` stream. Not reused. |
+| `10 + doorIndex` | door arrival | One stream per boarding door, advanced once per release |
+| `1000 + paxId*4 + phase` | per-passenger service | One stream per passenger per service phase (below) |
 
-All three use `initstate = seed`.
+All streams use `initstate = seed`.
+
+#### Why the service draws are per passenger
+
+The `sim` stream used to be a single stream consumed in **event order**: the
+first stow to begin took the first Weibull draw, whoever that happened to be.
+That made a passenger's own service time a function of **when they boarded**,
+which is precisely the thing a strategy comparison is trying to vary. Common
+random numbers were therefore only partial — the manifest was shared, but only
+about a fifth of passengers kept their stow time across a change of ordering,
+the residual correlation collapsed for strategies far from the baseline, and a
+paired confidence interval could come out **wider** than the unpaired one.
+
+Every service draw now comes from a sub-stream keyed on the **passenger id** —
+which is assigned in canonical seat order off the `pax` stream and is therefore
+the same person under every strategy — so the same traveller draws the same
+stow time, the same shuffle movements and the same bin behaviour whenever they
+board.
+
+**Phases, and why they are separate streams.** Within a passenger's block:
+
+| Phase | `initseq` | Draws, in order |
+|---|---|---|
+| 0 | `base + id*4 + 0` | Stow duration: one Weibull(shape, scale) per bag, `bags` of them |
+| 1 | `base + id*4 + 1` | Bin search: one Bernoulli(0.5) per bag that did not fit, choosing which way to search first |
+| 2 | `base + id*4 + 2` | Seat shuffle: one Triangular(min, mode, max) per elementary movement |
+| 3 | `base + id*4 + 3` | Boarding behaviour: Bernoulli(nonComplianceRate), then — only if that came up — randint(2*jitter+1), then Bernoulli(lateRate) |
+
+Phases 1 and 2 consume a number of draws that legitimately depends on the
+boarding order: how many bin searches you make depends on who filled the bin
+above your row, and how many shuffle movements you make depends on who is
+already sitting there. If all four phases shared one stream, that variable
+count would shift every later draw and reintroduce exactly the order dependence
+this exists to remove. Separate streams contain it.
+
+Phase 3's draw count depends only on its own first Bernoulli, which is itself
+invariant, so the whole sequence is deterministic per passenger.
+
+**Door arrivals are keyed on the door, not the passenger**, because that is what
+they are a property of: the k-th person to reach a given door waits the k-th
+drawn gap, whoever that person turns out to be. Door assignment is a function of
+the seat map, so each door's passenger *count* is the same under every strategy
+and the whole drawn arrival schedule cancels in a paired comparison. The
+*realised* entry times can still slip later than the drawn ones — nobody can
+step through a doorway somebody is still standing in — and that slip is genuine
+aisle backpressure, not RNG.
+
+#### What is deliberately still order-dependent
+
+Three things, all of them the effect being measured rather than noise to cancel:
+
+* **Bin congestion.** Stow duration carries a `(1 + binCongestionWeight * fill²)`
+  term, and `fill` — how full the bin above your row is when you reach it —
+  depends on who boarded first. Under shipped defaults this is why roughly a
+  third of passengers do *not* keep an identical stow time across a change of
+  ordering. With `binCongestionWeight = 0` and roomy bins the match is 100%.
+* **Shuffle movement count.** How many people you climb over depends on who is
+  already seated. The *durations* come from a fixed per-passenger sequence, so
+  two runs that produce the same movement count produce the same shuffle time.
+* **Within-group shuffles** on the `order` stream. These are part of the
+  strategy's definition — "random within the called group" — not an artefact.
+
+---
 
 ---
 
@@ -290,7 +355,24 @@ Passenger {
 6. **Tier assignment.** Seats in a `first`/`business`/`premium` cabin get that
    cabin's class as their tier. Economy passengers are assigned status tiers by
    drawing `random()` per passenger in ascending id and bucketing against
-   `eliteMix` cumulative weights.
+   `eliteMix` cumulative weights — **tilted toward the front of the cabin** by
+   `eliteForwardBias`.
+
+   The tilt: with `f = 1 - 2 * rowSlot / (nRowSlots - 1)` running +1 at the nose
+   to -1 at the tail, the weights of `elite_top`, `elite_mid` and `cardholder`
+   are multiplied by `max(0, 1 + bias*f)` and the weight of `basic` by
+   `max(0, 1 - bias*f)`. `standard` is untouched. The cumulative weights are
+   renormalised by the weighted pick, so the cabin-wide mix is unchanged and
+   only its distribution down the cabin moves. `eliteForwardBias = 0` reproduces
+   the uniform draw exactly. **Exactly one `random()` either way**, so the draw
+   count does not depend on the bias.
+
+   This is not cosmetic. Status flyers sit in the forward economy rows —
+   Comfort+, Main Cabin Extra, Economy Plus — and premium cabins are forward by
+   definition, so a scheme that boards by status is boarding the front of the
+   aircraft first, which is close to the worst possible order. Modelling status
+   as uniform over the cabin made every status-ordered strategy look markedly
+   better than it is. See RESEARCH_AIRLINES §7 #6.
 
 A slow passenger's `walkSpeed` is multiplied by `slowSpeedFactor` and their
 `stowMultiplier` by `slowStowFactor` after step 5.
@@ -337,13 +419,25 @@ It assigns `groupLabel` and returns the passengers in boarding sequence.
 | `reverse_pyramid` | Reverse pyramid | Diagonal wave from rear-window to front-aisle. Used by America West. |
 | `rotating_zone` | Rotating zone | Alternates rear zone / front zone to spread the aisle load. |
 | `block_boarding` | Block (by zone, random) | The classic 4-5 zone airline scheme. |
-| `open_seating` | Open seating (Southwest legacy) | No assigned seats; passengers pick per `openSeatingPolicy`. |
+| `open_seating` | Open seating (Southwest, 1971-2026) | No assigned seats; passengers pick per `openSeatingPolicy`. Retired: Southwest ended it 27 Jan 2026. |
 | `priority_5tier` | 5-tier priority (revenue) | Preboard → First/Business → Elite+Group1 → Group2 → Group3 → Group4. Realistic revenue-driven order. |
-| `common_sense_5tier` | 5-tier common sense | Revenue tiers honoured only for the cabin, then outside-in × back-to-front within economy. The "best boarding you could actually sell". |
+| `common_sense_5tier` | 5-tier common sense | Outside-in × back-to-front within economy, with fare/status merged **into** the group assignment. Party cohesion forced on. The "best boarding you could actually sell". |
+| `southwest_2026` | Southwest 2026 | WilMA × back-to-front projected onto 8 groups, with fare/status shifting whole groups. The real converged design, live since 27 Jan 2026. Party cohesion forced on. |
 | `by_bags` | Bag-count boarding | Zero-bag passengers first, then 1 bag, then 2. |
 | `slowest_first` | Slowest first | Sorted by expected service time descending. |
 
 `open_seating` is special: passengers have **no seat** until they enter. See §6.5.
+
+Two strategies set `requiresCohesion`, which forces `keepPartiesTogether` on for
+the run regardless of the config: `common_sense_5tier` and `southwest_2026`. For
+everything else party cohesion is a friction knob you turn off to see what the
+method would be worth if families did not exist. For a scheme whose group
+assignment is a joint function of seat location and fare it is part of the
+construction — every carrier that boards that way promotes the whole booking to
+its earliest-boarding member (United's "same and highest applicable",
+Lufthansa's "and companions") — so a run with it off is not a model of anything
+operated. Cohesion is **promote-to-earliest**: the party is emitted whole at the
+queue position of whichever member the strategy called first.
 
 ---
 
@@ -584,7 +678,9 @@ RunResult {
   interference: {none, one, two, sameParty},        // counts
   gateChecks, binSearches,
   aisleBlockEvents,
-  p50TimeToSeat, p90TimeToSeat, maxTimeToSeat,
+  p50AisleSeconds, p90AisleSeconds, maxAisleSeconds,
+  p50BoardingWaitSeconds, p90BoardingWaitSeconds,
+  p50TimeToSeat, p90TimeToSeat, maxTimeToSeat,   // deprecated aliases of the aisle trio
   throughputPaxPerMin,
   doors, completed,
   doorStats:      {doorId: {count, meanWalk, farFirst}},
@@ -594,11 +690,33 @@ RunResult {
 
 Notes on a few fields that are easy to read the wrong way:
 
-- **`p50/p90/maxTimeToSeat`** are percentiles of `sitTime` measured from the
-  start of boarding, not of `timeInAisle`. Everyone is queued at t = 0, so this
-  is the passenger-experienced wait. Percentiles are linearly interpolated
-  (`pos = q*(n-1)`, blend the two neighbours); both implementations must use
-  that formula rather than a language built-in, because built-ins disagree.
+- **Wait statistics.** "Time to seat" is two different questions and the field
+  names now say which is which, because conflating them is what produced a
+  reported "worst time to seat" that was identically `totalSeconds`.
+
+  - **`p50/p90/maxAisleSeconds`** are percentiles of `sitTime - enterTime`: the
+    time from stepping through the aircraft door to sitting down. This is the
+    per-passenger `timeInAisle`, aggregated. It answers *"how long was I stuck
+    in the aisle"*, and it is the quantity the passenger-wait chart plots,
+    because a fast mean hiding a miserable tail is the thing that chart exists
+    to show.
+  - **`p50/p90BoardingWaitSeconds`** are percentiles of `sitTime`: the wait from
+    doors-open to seated, jetbridge queue included. It answers *"how long was I
+    waiting overall"*. The per-passenger `queueWaitTime` is the jetbridge half
+    of it on its own.
+  - There is **no `maxBoardingWaitSeconds`**, deliberately. The last passenger
+    to sit down sits at `totalSeconds` by construction, so its maximum is the
+    run length restated and carries no information. `maxAisleSeconds` is a real
+    statistic — on a320neo/seed 1/single door it is about 200 s against a
+    728 s boarding — which is why the maximum is kept for that family and
+    dropped for this one.
+  - **`p50/p90/maxTimeToSeat`** are retained as deprecated aliases of the aisle
+    trio, so existing consumers keep working and now receive the quantity the
+    name always claimed. New code should use the explicit names.
+
+  Percentiles are linearly interpolated (`pos = q*(n-1)`, blend the two
+  neighbours); both implementations must use that formula rather than a language
+  built-in, because built-ins disagree.
 - **`interference`** buckets by blocker count, with `sameParty` taking priority:
   `none` if there were no blockers, else `sameParty` if they all shared the
   passenger's party, else `one` or `two`. The four buckets sum to `paxCount`.
@@ -615,6 +733,11 @@ Notes on a few fields that are easy to read the wrong way:
   figure is the **worst** door, not the average, because a cabin-wide rear-first
   order scores about +0.25 at a forward door and -0.25 at an aft one and the two
   cancel if averaged -- hiding exactly the effect this is here to measure.
+- **`aisleOccupancy`** counts bodies actually in an aisle lane, including the
+  closing sample. On an incomplete run that is *not* `paxCount - seated`: the
+  difference is everybody still queued on the jetbridge, who are QUEUED rather
+  than in the aisle, and counting them put a spike on the end of the chart that
+  never happened.
 - **`completed`** is false if the run hit `MAX_SIM_SECONDS`. Any consumer that
   averages `totalSeconds` should check it.
 
@@ -638,6 +761,7 @@ SimConfig {
   walkSpeedMean, walkSpeedSd,
   preboardRate, slowPaxRate, slowSpeedFactor, slowStowFactor, childRate,
   eliteMix: {tier: weight},
+  eliteForwardBias,           // 0..1, forward concentration of status (3.1 step 6)
   // service times
   stowWeibullShape, stowWeibullScale, stowVariability,
   stowPassSpeedFactor,        // 0 = a stowing passenger closes the aisle (default)

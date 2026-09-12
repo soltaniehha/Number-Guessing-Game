@@ -21,7 +21,9 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Sequence, Tuple
 
 from .aircraft import AISLE_SEAT, Aircraft, MIDDLE, WINDOW
-from .config import SimConfig
+from .config import (
+    SERVICE_PHASE_BEHAVIOUR, SERVICE_STREAM_BASE, SERVICE_STREAM_STRIDE, SimConfig,
+)
 from .passengers import Passenger
 from .rng import PCG32
 
@@ -432,7 +434,14 @@ def strat_common_sense_5tier(pax: List[Passenger], ac: Aircraft, cfg: SimConfig,
     out: List[Passenger] = []
     for i, bucket in enumerate(buckets):
         ordered = _shuffled(rng, bucket)
-        ordered.sort(key=lambda p: -p.rowSlot)   # rear to front, shuffled within a row
+        # Premium cabin ahead of everyone inside its group, then rear to front,
+        # shuffled within a row. The premium tie-break only bites in Group 1,
+        # where the status shift also lands top-tier economy passengers: the
+        # premium cabin boarding first is the commercially non-negotiable part
+        # this whole strategy is built around conceding, and rear-first sorting
+        # alone would put it behind the rear-seated elites it shares a group
+        # with.
+        ordered.sort(key=lambda p: (p.seat.classKey == "economy", -p.rowSlot))
         out.extend(_label(ordered, names[i]))
     return out
 
@@ -553,16 +562,35 @@ def requires_cohesion(strategy: str) -> bool:
 
 
 def apply_post_processing(
-    queue: List[Passenger], cfg: SimConfig, rng: PCG32
+    queue: List[Passenger], cfg: SimConfig
 ) -> List[Passenger]:
     """Preboards -> party cohesion -> non-compliance -> late arrivals.
 
     Order matters and is normative. Together these four steps are what separates
     a paper result from a gate result: they are the frictions that shrink
     Steffen's theoretical 2x to the ~20-25% airlines actually measure.
+
+    Takes no RNG. It used to take the `order` stream for the non-compliance and
+    lateness draws; those are per-passenger behaviours now and come from the
+    passenger's own sub-stream, so the `order` stream is consumed only by the
+    strategy function itself.
     """
     out = list(queue)
     cohere = cfg.keepPartiesTogether or requires_cohesion(cfg.strategy)
+
+    # Steps 3 and 4 draw a per-PASSENGER behaviour -- "does this person ignore
+    # their group" and "does this person turn up late" -- and both used to come
+    # off the shared `order` stream in queue order, which made them depend on
+    # the very ordering they are supposed to perturb. Drawn from the passenger's
+    # own sub-stream instead, the same traveller misbehaves in the same way
+    # under every strategy, which is what a paired comparison needs. The draw
+    # sequence within the stream is fixed -- compliance bernoulli, then the
+    # jitter randint if and only if that bernoulli came up, then the lateness
+    # bernoulli -- and its length therefore depends only on values that are
+    # themselves invariant. See ENGINE_SPEC 1.3.
+    def behaviour_rng(p: Passenger) -> PCG32:
+        return PCG32(cfg.seed, SERVICE_STREAM_BASE
+                     + p.id * SERVICE_STREAM_STRIDE + SERVICE_PHASE_BEHAVIOUR)
 
     # 1. Preboards. Stable, so the strategy's ordering survives among them.
     if cfg.preboardFirst:
@@ -599,22 +627,28 @@ def apply_post_processing(
 
     # 3. Non-compliance. 15% of passengers ignore the group they were called in.
     jitter = cfg.complianceJitter
-    if cfg.nonComplianceRate > 0 and jitter > 0:
+    do_jitter = cfg.nonComplianceRate > 0 and jitter > 0
+    do_late = cfg.lateRate > 0
+    if do_jitter or do_late:
+        behaviour = {p.id: behaviour_rng(p) for p in out}
+
+    if do_jitter:
         keyed: List[Tuple[int, int, Passenger]] = []
         for i, p in enumerate(out):
             k = 0
-            if rng.bernoulli(cfg.nonComplianceRate):
-                k = rng.randint(2 * jitter + 1) - jitter
+            r = behaviour[p.id]
+            if r.bernoulli(cfg.nonComplianceRate):
+                k = r.randint(2 * jitter + 1) - jitter
             keyed.append((i + k, i, p))
         keyed.sort(key=lambda t: (t[0], t[1]))
         out = [t[2] for t in keyed]
 
     # 4. Late arrivals -- the sprint from the connecting gate.
-    if cfg.lateRate > 0:
+    if do_late:
         late: List[Passenger] = []
         ontime: List[Passenger] = []
         for p in out:
-            (late if rng.bernoulli(cfg.lateRate) else ontime).append(p)
+            (late if behaviour[p.id].bernoulli(cfg.lateRate) else ontime).append(p)
         out = ontime + late
 
     for i, p in enumerate(out):
@@ -778,4 +812,4 @@ def build_order(
         raise AssertionError(
             f"strategy {cfg.strategy!r} returned {len(queue)} of {len(pax)} passengers"
         )
-    return apply_post_processing(queue, cfg, rng)
+    return apply_post_processing(queue, cfg)

@@ -105,6 +105,8 @@ describe('compareStrategies', () => {
       'interference',
       'loadFactor',
       'name',
+      'p90AisleSeconds',
+      'p90BoardingWaitSeconds',
       'p90TimeToSeat',
       'pairedVsBaseline',
       'paxCount',

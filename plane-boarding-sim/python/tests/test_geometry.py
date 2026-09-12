@@ -9,6 +9,8 @@ from plane_boarding.aircraft import (
 )
 from plane_boarding.config import ConfigError
 
+from helpers import cfg_for
+
 #: Declared totals from the cabin research. These are the numbers the roster has
 #: to reproduce exactly -- a seat-count drift means a layout or a missingSeats
 #: entry has been edited without redoing the arithmetic.
@@ -194,3 +196,41 @@ def test_geometry_payload_is_json_serialisable_and_complete():
         json.loads(json.dumps(payload))
         assert len(payload["seats"]) == DECLARED_SEATS[aid]
         assert payload["rows"] and payload["doors"]
+
+
+def test_a_layout_that_repeats_a_seat_letter_is_rejected_at_load():
+    """The per-letter geometry map is keyed by letter, and `_resolve` looks each
+    letter up again per row. A layout that used "D" twice would silently give
+    both D seats whichever position came last -- same depth, same block, same bin
+    run -- and the only symptom would be a boarding time that is quietly wrong.
+    Nothing in the shipped roster does this; the point is that nothing can.
+    """
+    from plane_boarding.aircraft import _analyse_layout
+    _analyse_layout(["A", "B", "C", "|", "D", "E", "F"])   # the control
+    with pytest.raises(ConfigError, match="repeats seat letter 'D'"):
+        _analyse_layout(["A", "B", "D", "|", "D", "E", "F"])
+    with pytest.raises(ConfigError, match="repeats seat letter 'A'"):
+        _analyse_layout(["A", "|", "A"])
+
+
+def test_a_seat_whose_bin_run_does_not_exist_is_an_error_not_a_full_bin():
+    """`arrive()` used to read a missing bin run as `fill = 1.0`, i.e. as a bin
+    that happens to be completely full, and charge the passenger the whole
+    `binCongestionWeight` penalty for it. A bin run that is absent above its own
+    row is not congestion, it is a seat map and a capacity table that disagree,
+    and the two can only disagree because of a bug. It must say so.
+
+    Constructed by hand because no shipped airframe can produce it -- which is
+    exactly why the branch was never noticed.
+    """
+    from plane_boarding.engine import simulate as sim
+    ac = get_aircraft("a320neo")
+    seat = ac.seats[10]
+    original = seat.binRun
+    try:
+        seat.binRun = 99
+        with pytest.raises(ConfigError, match="declares binRun 99"):
+            sim(cfg_for("a320neo", "random", seed=1, loadFactor=1.0,
+                        bagWeights={"0": 0, "1": 1, "2": 0}), ac)
+    finally:
+        seat.binRun = original

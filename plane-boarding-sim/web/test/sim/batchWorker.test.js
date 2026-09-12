@@ -106,12 +106,16 @@ describe('planJobs', () => {
     expect(jobs.filter((j) => j.key === 'wilma').map((j) => j.seed)).toEqual([100, 101, 102])
   })
 
-  it('appends sweep jobs only when load factors are asked for', () => {
+  it('appends sweep jobs only when sweep points are asked for', () => {
     expect(planJobs({ seed: 0 }, ['random'], 2, null)).toHaveLength(2)
-    const jobs = planJobs({ seed: 0 }, ['random'], 2, { loadFactors: [0.5, 1.0], runs: 3 })
+    const jobs = planJobs({ seed: 0 }, ['random'], 2, {
+      param: 'loadFactor',
+      values: [0.5, 1.0],
+      runs: 3,
+    })
     const sweep = jobs.filter((j) => j.kind === 'sweep')
     expect(sweep).toHaveLength(6)
-    expect(sweep.map((j) => j.loadFactor)).toEqual([0.5, 0.5, 0.5, 1.0, 1.0, 1.0])
+    expect(sweep.map((j) => j.value)).toEqual([0.5, 0.5, 0.5, 1.0, 1.0, 1.0])
     expect(sweep.map((j) => j.li)).toEqual([0, 0, 0, 1, 1, 1])
   })
 })

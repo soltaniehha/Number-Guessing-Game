@@ -489,6 +489,25 @@ They are collected here so they are not mistaken for sourced numbers:
 - **Overhead-bin per-row capacity and the walk-back penalty formula** (§7) — no peer-reviewed
   numeric source exists for the walk-back/gate-check penalty. Both the per-row capacity constant
   and the search-and-stow penalty are my extrapolation.
+- **`eliteForwardBias` = 1.0** (ENGINE_SPEC §3.1 step 6) — the *direction* is
+  documented fact: elite and cardholder status concentrates in Comfort+ / Main
+  Cabin Extra / Economy Plus, which is the forward economy rows, and premium
+  cabins are forward by definition (RESEARCH_AIRLINES §7 #6). The *shape* is
+  mine: a linear tilt on the `eliteMix` weights, running from `1 + bias` at the
+  nose to `1 - bias` at the tail, preserving the cabin-wide mix. No source
+  publishes a status-by-row distribution. 1.0 is the strongest linear tilt that
+  stays non-negative and is shipped because the real concentration is in roughly
+  the forward quarter of economy, which a linear ramp already understates rather
+  than exaggerates. Set it to 0 to recover the old uniform draw exactly, and
+  sweep it (`cli sweep --param eliteForwardBias`) to see how much of
+  `priority_5tier`'s penalty this assumption is carrying — that sweep is the
+  honest way to present a number whose shape is assumed.
+- **`STATUS_GROUP_SHIFT`, how many boarding groups a status tier is worth**
+  (`strategies.py`) — used by `common_sense_5tier` and `southwest_2026`. Real
+  carriers are more generous than the −3/−2/−1 shipped here: Delta moves a
+  Diamond from about Zone 6 to Zone 2, American a top elite from roughly Group 7
+  to Group 2. The shipped table is deliberately conservative, so the measured
+  cost of merging status into a flow ordering is a lower bound.
 
 ### 12.3 Partial aisle blocking while stowing (`stowPassSpeedFactor` = 0.40)
 
@@ -511,20 +530,67 @@ exactly this: full blocking yields ~3 simultaneous stowers where the regression
 implies ~7. The mechanism is a genuine correction to a simplification, not a
 tuning knob invented to hit a number.
 
-**What the calibration found.** a320neo, `random`, 180 pax, 1L only, 100
-replications for the absolute figure; ratios over 70 replications per strategy;
+**What the calibration found.** a320neo, `random`, 180 pax, 1L only, 60
+replications for the absolute figure; ratios over 40 replications per strategy;
 B777 over 20. Every row satisfies the ordering assertion except 0.60.
 
-| `stowPassSpeedFactor` | single-door T | f2b | b2f | wilma | rev.pyr | steffen | ordering | B777 best | B777 steffen |
-|---|---|---|---|---|---|---|---|---|---|
-| **0 (strict, shipped)** | **1419 s** ✗ | 1.48 ✓ | 1.10 ✗ | 0.94 ✗ | **0.90 ✓** | **0.78 ✓** | OK | **rev. pyramid ✓** | **1.01 ✓** |
-| 0.20 | 1144 s ✗ | 1.46 ✓ | 1.11 ✗ | 0.94 ✗ | 0.92 ✗ | 0.86 ✗ | OK | **wilma_zoned ✗** | 1.04 ✓ |
-| 0.30 | **1080 s ✓** | 1.47 ✓ | 1.12 ✗ | 0.92 ✗ | 0.92 ✗ | 0.84 ✗ | OK (by 0.001) | rev. pyramid ✓ | 1.03 ✓ |
-| 0.40 | **1038 s ✓** | 1.49 ✓ | 1.14 ✗ | 0.93 ✗ | 0.93 ✗ | 0.84 ✗ | OK | rev. pyramid ✓ | 1.01 ✓ |
-| 0.60 | **993 s ✓** | 1.52 ✗ | 1.19 ✗ | 0.93 ✗ | 0.95 ✗ | 0.84 ✗ | **FAIL** | rev. pyramid ✓ | 1.00 ✓ |
+> **Re-measured** after two engine changes that move every random draw: complete
+> common random numbers (per-passenger service sub-streams, ENGINE_SPEC §1.3)
+> and the forward-biased status draw (§3.1 step 6). Neither is a change to the
+> physics, so the table should have moved only by sampling noise, and it did —
+> the shipped row is within 0.02 on every ratio and 1.5% on the absolute time.
+> That agreement is itself worth recording: it is evidence the CRN rework did
+> not quietly re-tune the model.
+
+| `stowPassSpeedFactor` | single-door T | f2b | b2f | wilma | rev.pyr | steffen | wilma_zoned | ordering | B777 best | B777 steffen |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **0 (strict)** | **1431 s** ✗ | 1.47 ✓ | 1.07 ✗ | 0.92 ✗ | **0.90 ✓** | **0.77 ✓** | 0.90 | OK | wilma_zoned (0.93) | **1.04 ✓** |
+| 0.20 | 1164 s ✗ | 1.42 ✓ | 1.07 ✗ | 0.93 ✗ | 0.91 ✗ | 0.85 ✗ | 0.91 | OK | — | — |
+| 0.30 | **1093 s ✓** | 1.45 ✓ | 1.10 ✗ | 0.91 ✗ | 0.91 ✗ | 0.83 ✗ | 0.91 | OK | — | — |
+| **0.40 (shipped)** | **1054 s ✓** | 1.46 ✓ | 1.12 ✗ | 0.91 ✗ | 0.91 ✗ | 0.83 ✗ | 0.92 | OK | rev. pyramid (0.97) | 1.01 ✓ |
+| 0.60 | **1017 s ✓** | 1.47 ✓ | 1.13 ✗ | 0.90 ✗ | 0.91 ✗ | 0.82 ✗ | 0.92 | **FAIL** | — | — |
 
 Literature bands for reference: f2b 1.30–1.50, b2f 1.20–1.35, wilma 0.85–0.92,
 reverse pyramid 0.82–0.90, Steffen 0.70–0.80 (§5c).
+
+**The commercial strategies, at the shipped 0.40.** These are the comparison the
+tool exists to make, and they are reported with the paired difference against
+`random` rather than a bare ratio, because that is the interval that answers
+"is this really better" (60 replications, a320neo / 1L / 180 pax):
+
+| strategy | mean | ratio | paired vs random | significant |
+|---|---|---|---|---|
+| `wilma_zoned` | 970 s | **0.920** | −84.0 s ± 21.3 | yes |
+| `common_sense_5tier` | 985 s | **0.935** | −68.7 s ± 29.1 | yes |
+| `southwest_2026` | 1028 s | 0.976 | −25.7 s ± 33.3 | **no** |
+| `random` | 1054 s | 1.000 | — | — |
+| `priority_5tier` | 1099 s | **1.043** | +45.4 s ± 25.3 | yes |
+| `block_boarding` | 1184 s | 1.124 | +130.7 s ± 31.2 | yes |
+| `open_seating` | 1482 s | 1.407 | +428.8 s ± 39.8 | yes |
+
+Three things in that table are the headline result of the whole project:
+
+1. **`priority_5tier` is significantly SLOWER than a free-for-all**, at 1.043.
+   Before status was modelled as forward-biased it sat at 0.997 — statistically
+   indistinguishable from random, which flattered it badly. Selling queue
+   position to people who sit at the front is a front-to-back boarding wearing a
+   loyalty programme, and now the model says so.
+2. **`southwest_2026`, the real converged design, is a statistical tie with
+   random.** Merging a fare and status ladder into WilMA × back-to-front costs
+   almost exactly what the flow logic earns: `wilma_zoned` alone is 0.920, and
+   the same spatial ordering with the status ladder merged in is 0.976 with an
+   interval that spans zero. That is not a criticism of Southwest — it is the
+   price of the commercial constraint, measured.
+3. **`common_sense_5tier` beats it**, 0.935 against 0.976, and beats it on 8 of
+   8 independent seed bases. The proposal is now being compared against a real
+   deployed design rather than a strawman, and it still wins.
+
+Note `common_sense_5tier` was **1.120 — worse than random** — before the elite
+rule was corrected (RESEARCH_AIRLINES §7 #2). "Elites at the front of their
+assigned group" on an outside-in scheme put top-tier flyers, who
+disproportionately hold aisle seats, behind the entire basic-economy window
+population. Fixing that single rule moved the strategy by 18 points and turned
+the headline claim from false to true.
 
 **Decision: ship 0.40.** The two candidate models are both imperfect on ratio
 magnitudes -- strict misses back-to-front (1.10 vs 1.20-1.35) and WilMA (0.94 vs
@@ -550,7 +616,8 @@ collapse all survive.
 
 **Two ordering relations are also lost, and this was not visible when the
 decision was taken.** Verified over 8 independent seed bases, 30 replications
-each, a320neo / 1L / 180 pax:
+each, a320neo / 1L / 180 pax. Re-measured after the CRN and status-bias changes;
+the two lost relations are still lost, by the same margin:
 
 | relation | holds at 0.40 | note |
 |---|---|---|
@@ -561,8 +628,12 @@ each, a320neo / 1L / 180 pax:
 | wilma > steffen_perfect | 8/8 | |
 | reverse_pyramid > steffen_perfect | 8/8 | |
 | random > steffen_modified > steffen_perfect | 8/8 | |
-| **wilma > reverse_pyramid** | **1/8** | the two land within ~0.1% and the order flips with the seed |
-| **wilma > wilma_zoned** | **2/8** | outside-in x zones no longer beats plain outside-in |
+| **wilma > reverse_pyramid** | **0/8** | the two land within ~0.1% and the order flips with the seed (was 1/8) |
+| **wilma > wilma_zoned** | **1/8** | outside-in x zones no longer beats plain outside-in (was 2/8) |
+| random > priority_5tier | **0/8** | priority boarding is slower than a free-for-all on every seed base |
+| random > common_sense_5tier | 8/8 | the proposal beats random on every seed base |
+| random > southwest_2026 | 6/8 | the real 2026 design is a tie with random, as the paired interval says |
+| southwest_2026 > common_sense_5tier | 8/8 | the proposal beats the real converged design on every seed base |
 
 > **Open question, worth a future maintainer's time:** losing
 > `wilma > wilma_zoned` is the one that should not happen. Adding aisle
@@ -605,6 +676,57 @@ in some way we have not identified, or `T = 4.5N + 138` — a linear fit across 
 3.7 s arrivals plus ~26 s of per-passenger aisle service — is optimistic at the
 top of its range. Resolving it needs the Schultz PDFs that were unreachable in
 the research session (§14.1).
+
+### 12.4 Common random numbers are complete, and what that does not buy
+
+Not a deviation from the literature — the literature does not discuss it — but a
+methodological choice big enough to record next to them, because it changes what
+every comparison in this document means.
+
+Each strategy in a comparison is run over the same seed sequence. That used to
+share only the passenger manifest: service times came from a single `sim` stream
+consumed in **event order**, so the same passenger drew a different stow time
+under a different boarding order. Measured, only about a fifth of passengers
+kept their stow time across a change of ordering, and a paired confidence
+interval could come out **wider** than the unpaired one for a strategy that
+diverged strongly from the baseline.
+
+Service draws now come from sub-streams keyed on the passenger, and door arrivals
+from one stream per door indexed by release (ENGINE_SPEC §1.3). Both columns
+below are measured, on a320neo / 1L / 180 pax, 30 replications, over the same
+nine strategies:
+
+| | before | after |
+|---|---|---|
+| passengers keeping the same **stow** time across a change of order | 35/180 (19%) | **140/180 (78%)** |
+| ... with the bin-congestion term removed and bins roomy | 35/180 (19%) | **180/180 (100%)** |
+| passengers keeping the same **shuffle** time | 0/180 (0%) | **154/180 (86%)** |
+| door arrival schedule | strategy-dependent | **identical, reconstructible from the seed** |
+| mean correlation of `T_strategy` with `T_random` across seeds | 0.20 | **0.48** |
+| mean paired CI as a fraction of unpaired | 0.892 | **0.728** |
+| best case | 0.735 | **0.601** |
+| worst case | **1.075 — paired was WIDER** | **0.838 — never wider** |
+
+The qualitative change matters more than the averages: before, two of the nine
+strategies (`back_to_front`, `by_bags`) had *negative* correlation with the
+baseline and paired **wider** than unpaired, so CRN was actively buying nothing
+exactly where a comparison is hardest. Afterwards every strategy pairs
+strictly narrower, including the ones that diverge hardest.
+
+**It is not near-total cancellation of the boarding-time interval, and it never
+could have been.** At a mean correlation of 0.48, only about **23%** of the
+between-seed variance is shared (it was 4%). The rest is genuine
+strategy × manifest **interaction** — a given set of bags and parties suits some
+orderings better than others — and that interaction *is* the quantity being
+estimated, not noise to be removed. Two diagnostics confirm it is interaction
+rather than leftover RNG coupling: turning off non-compliance and lateness moves
+the ratio by only ~0.03, and turning parties off makes it **worse** (0.65 → 0.93
+for WilMA), which is what you would expect if the shared structure being
+cancelled were the manifest itself.
+
+What remains order-dependent is order-dependent in the world: how full the bin
+above your row is when you reach it, how many people you climb over, and the
+within-group shuffle that is part of a strategy's own definition.
 
 ---
 

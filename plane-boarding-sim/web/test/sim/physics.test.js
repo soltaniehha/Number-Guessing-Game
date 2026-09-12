@@ -18,6 +18,34 @@ import { cfgFor } from './helpers.js'
 const IN_AISLE = new Set([WALKING, STOWING, SHUFFLING])
 const SOLID = new Set([WALKING, SHUFFLING])
 
+/**
+ * Assert a per-(frame, passenger) invariant over a whole replay.
+ *
+ * These sweeps visit 400,000-1,600,000 (frame, passenger) pairs. Calling
+ * `expect()` at each one costs about ten microseconds of matcher machinery --
+ * several seconds in total, against a simulation that takes 75 ms -- which is
+ * enough to push a test past vitest's 5 s default when the suite is running 43
+ * files in parallel and the machine is loaded. That failure looks exactly like
+ * a nondeterministic engine and is not one: the run is bit-identical every
+ * time, it is the assertion loop that is slow.
+ *
+ * So scan in plain JS and raise ONE assertion, naming the first offending
+ * (frame, passenger) so a real violation is still diagnosable.
+ *
+ * @param {number} frames   frame count
+ * @param {number} n        passengers per frame
+ * @param {(f:number,i:number)=>string|null} check  message if violated, else null
+ */
+function everyFrame(frames, n, check) {
+  for (let f = 1; f < frames; f++) {
+    for (let i = 0; i < n; i++) {
+      const bad = check(f, i)
+      if (bad !== null) return `frame ${f}, passenger ${i}: ${bad}`
+    }
+  }
+  return null
+}
+
 /** One run recorded at full resolution, plus per-passenger walk speed and lane. */
 function trace(aid = 'a320neo', strategy = 'random', seed = 3, overrides = {}) {
   const cfg = cfgFor(aid, strategy, seed, overrides)
@@ -204,26 +232,25 @@ it('never lets anybody move faster than their own walk speed', () => {
   const { replay, speed } = trace('a320neo', 'random')
   const { state: states, x: xs } = replay.frames
   const dt = replay.frameInterval
-  for (let f = 1; f < states.length; f++) {
-    for (let i = 0; i < states[f].length; i++) {
-      if (IN_AISLE.has(states[f][i]) && IN_AISLE.has(states[f - 1][i])) {
-        expect(Math.abs(xs[f][i] - xs[f - 1][i])).toBeLessThanOrEqual(speed[i] * dt + 1e-3)
-      }
-    }
-  }
+  const bad = everyFrame(states.length, states[0].length, (f, i) => {
+    if (!IN_AISLE.has(states[f][i]) || !IN_AISLE.has(states[f - 1][i])) return null
+    const moved = Math.abs(xs[f][i] - xs[f - 1][i])
+    const cap = speed[i] * dt + 1e-3
+    return moved <= cap ? null : `moved ${moved.toFixed(4)}m in one tick, cap ${cap.toFixed(4)}m`
+  })
+  expect(bad).toBeNull()
 })
 
 it('does not let a stowing or shuffling passenger drift', () => {
   const { replay } = trace('a220_300', 'random')
   const { state: states, x: xs } = replay.frames
-  for (let f = 1; f < states.length; f++) {
-    for (let i = 0; i < states[f].length; i++) {
-      const s = states[f][i]
-      if ((s === STOWING || s === SHUFFLING) && states[f - 1][i] === s) {
-        expect(xs[f][i]).toBeCloseTo(xs[f - 1][i], 6)
-      }
-    }
-  }
+  const bad = everyFrame(states.length, states[0].length, (f, i) => {
+    const s = states[f][i]
+    if (!(s === STOWING || s === SHUFFLING) || states[f - 1][i] !== s) return null
+    const drift = Math.abs(xs[f][i] - xs[f - 1][i])
+    return drift < 5e-7 ? null : `drifted ${drift}m while state ${s}`
+  })
+  expect(bad).toBeNull()
 })
 
 it('permits an overtake only past a STOWING passenger', () => {
@@ -247,26 +274,25 @@ it('only ever moves a walker toward their own seat', () => {
   const { replay } = trace('b787_9', 'random', 3, { loadFactor: 0.85 })
   const { state: states, x: xs } = replay.frames
   const targets = replay.passengers.map((p) => p.seatX)
-  for (let f = 1; f < states.length; f++) {
-    for (let i = 0; i < states[f].length; i++) {
-      if (states[f][i] === WALKING && states[f - 1][i] === WALKING) {
-        const before = Math.abs(targets[i] - xs[f - 1][i])
-        const after = Math.abs(targets[i] - xs[f][i])
-        expect(after).toBeLessThanOrEqual(before + 1e-6)
-      }
-    }
-  }
+  const bad = everyFrame(states.length, states[0].length, (f, i) => {
+    if (states[f][i] !== WALKING || states[f - 1][i] !== WALKING) return null
+    const before = Math.abs(targets[i] - xs[f - 1][i])
+    const after = Math.abs(targets[i] - xs[f][i])
+    return after <= before + 1e-6 ? null : `moved away from seat, ${before} -> ${after}`
+  })
+  expect(bad).toBeNull()
 })
 
 it('only ever advances the state machine', () => {
   // QUEUED -> WALKING -> STOWING -> SHUFFLING -> SEATED, never backwards.
   const { replay } = trace('e175', 'steffen_perfect')
   const states = replay.frames.state
-  for (let f = 1; f < states.length; f++) {
-    for (let i = 0; i < states[f].length; i++) {
-      expect(states[f][i]).toBeGreaterThanOrEqual(states[f - 1][i])
-    }
-  }
+  const bad = everyFrame(states.length, states[0].length, (f, i) =>
+    states[f][i] >= states[f - 1][i]
+      ? null
+      : `state went backwards ${states[f - 1][i]} -> ${states[f][i]}`,
+  )
+  expect(bad).toBeNull()
 })
 
 it('skips stowing entirely for zero-bag passengers', () => {

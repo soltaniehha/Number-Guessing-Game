@@ -3,7 +3,8 @@
  *
  * Protocol (see `src/state/batchRunner.js`, which drives this):
  *
- *   in    {type:'start', config, strategies:[...], runs:N, sweep?:{loadFactors:[...], runs?:N}}
+ *   in    {type:'start', config, strategies:[...], runs:N,
+ *          sweep?:{param?:'loadFactor', values?:[...], loadFactors?:[...], runs?:N}}
  *         {type:'stop'}
  *   out   {type:'progress', done, total, partial:BatchResult}
  *         {type:'done', result:BatchResult}
@@ -33,7 +34,7 @@
  * record that keeps every field it reads.
  */
 import { summariseStrategy } from '../state/aggregate.js'
-import { STRATEGIES, runSimulation } from './index.js'
+import { SWEEPABLE, STRATEGIES, runSimulation } from './index.js'
 
 /** Yield to the message queue at least this often, so `stop` lands promptly. */
 const SLICE_MS = 25
@@ -243,7 +244,7 @@ const yieldToQueue = () => new Promise((resolve) => setTimeout(resolve, 0))
  * Build the flat list of jobs. Every strategy is run over the SAME seed
  * sequence -- common random numbers -- so a comparison at n runs discriminates
  * about as well as a few hundred independent ones would. The sweep reuses the
- * same seeds at each load factor for the same reason.
+ * same seeds at each point for the same reason.
  */
 function planJobs(config, strategies, runs, sweep) {
   const jobs = []
@@ -251,21 +252,61 @@ function planJobs(config, strategies, runs, sweep) {
   for (const key of strategies) {
     for (let i = 0; i < runs; i++) jobs.push({ kind: 'main', key, seed: baseSeed + i })
   }
-  if (sweep && Array.isArray(sweep.loadFactors) && sweep.loadFactors.length) {
+  // Normalised here as well as in `start`, because this is exported and callers
+  // hand it the raw `{loadFactors}` spec that `state/sweep.js` builds.
+  // Normalising is idempotent, so passing an already-normalised spec is fine.
+  sweep = normaliseSweep(sweep)
+  if (sweep && sweep.values.length) {
     // A sweep is a second axis on top of an already-large batch, so it gets its
     // own, smaller replication count unless the caller names one.
     const sweepRuns = Number.isFinite(sweep.runs)
       ? Math.max(1, Math.trunc(sweep.runs))
       : Math.max(3, Math.min(12, Math.round(runs / 4)))
     for (const key of strategies) {
-      for (let li = 0; li < sweep.loadFactors.length; li++) {
+      for (let li = 0; li < sweep.values.length; li++) {
         for (let i = 0; i < sweepRuns; i++) {
-          jobs.push({ kind: 'sweep', key, li, loadFactor: sweep.loadFactors[li], seed: baseSeed + i })
+          jobs.push({
+            kind: 'sweep',
+            key,
+            li,
+            param: sweep.param,
+            value: sweep.values[li],
+            // Kept for callers written against the load-factor-only protocol.
+            ...(sweep.param === 'loadFactor' ? { loadFactor: sweep.values[li] } : {}),
+            seed: baseSeed + i,
+          })
         }
       }
     }
   }
   return jobs
+}
+
+/**
+ * Normalise the incoming sweep spec.
+ *
+ * The axis used to be hard-wired to `loadFactor`, and the wire format said so.
+ * It now carries a parameter name, because load factor is not the only axis
+ * worth sweeping -- `preboardRate` above all, where the curve is expected to
+ * bend once preboarding stops being a prologue and becomes the constraint. The
+ * old `{loadFactors:[...]}` shape is still accepted and still means exactly what
+ * it did, so nothing that speaks the old protocol has to change.
+ */
+function normaliseSweep(spec) {
+  if (!spec) return null
+  const param = typeof spec.param === 'string' && spec.param ? spec.param : 'loadFactor'
+  const raw = Array.isArray(spec.values)
+    ? spec.values
+    : Array.isArray(spec.loadFactors)
+      ? spec.loadFactors
+      : null
+  if (!raw || !raw.length) return null
+  if (!Object.prototype.hasOwnProperty.call(SWEEPABLE, param)) {
+    throw new Error(
+      `cannot sweep '${param}'; sweepable parameters: ${JSON.stringify(Object.keys(SWEEPABLE).sort())}`,
+    )
+  }
+  return { param, values: Array.from(raw), runs: spec.runs }
 }
 
 async function start(msg) {
@@ -275,7 +316,7 @@ async function start(msg) {
       ? msg.strategies
       : [config.strategy].filter(Boolean)
   const runs = Math.max(1, Math.trunc(msg.runs ?? config.runs ?? 1))
-  const sweepSpec = msg.sweep && Array.isArray(msg.sweep.loadFactors) ? msg.sweep : null
+  const sweepSpec = normaliseSweep(msg.sweep)
 
   const accs = new Map(strategies.map((k) => [k, new StrategyAccumulator(k)]))
   const jobs = planJobs(config, strategies, runs, sweepSpec)
@@ -284,8 +325,15 @@ async function start(msg) {
   // Running sums for the sweep, so a partial sweep still plots honestly.
   let sweep = null
   if (sweepSpec) {
-    sweep = { loadFactors: [...sweepSpec.loadFactors], byStrategy: {} }
-    for (const key of strategies) sweep.byStrategy[key] = sweepSpec.loadFactors.map(() => null)
+    sweep = {
+      param: sweepSpec.param,
+      values: [...sweepSpec.values],
+      // Emitted as well as `values` so consumers written against the
+      // load-factor-only protocol keep working unchanged.
+      loadFactors: [...sweepSpec.values],
+      byStrategy: {},
+    }
+    for (const key of strategies) sweep.byStrategy[key] = sweepSpec.values.map(() => null)
   }
   const sweepSums = new Map()
 
@@ -312,7 +360,7 @@ async function start(msg) {
       ...config,
       strategy: job.key,
       seed: job.seed,
-      ...(job.kind === 'sweep' ? { loadFactor: job.loadFactor } : {}),
+      ...(job.kind === 'sweep' ? { [job.param]: job.value } : {}),
     })
     if (job.kind === 'main') {
       accs.get(job.key).add(result)

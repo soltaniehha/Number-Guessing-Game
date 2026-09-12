@@ -1,5 +1,5 @@
 /**
- * Each of the fifteen strategies, plus the universal post-processing pipeline.
+ * Each of the sixteen strategies, plus the universal post-processing pipeline.
  * Mirrors `python/tests/test_strategies.py`.
  */
 import { describe, expect, it } from 'vitest'
@@ -15,8 +15,9 @@ const ALL = Object.keys(STRATEGIES).sort()
 const sum = (xs) => xs.reduce((a, b) => a + b, 0)
 const meanOf = (xs) => sum(xs) / xs.length
 
-it('has the fifteen documented strategies, each with printable metadata', () => {
-  expect(ALL).toHaveLength(15)
+it('has the sixteen documented strategies, each with printable metadata', () => {
+  expect(ALL).toHaveLength(16)
+  expect(ALL).toContain('southwest_2026')
   for (const key of ALL) {
     const entry = STRATEGIES[key]
     expect(entry.name).toBeTruthy()
@@ -136,11 +137,114 @@ it('common_sense_5tier uses exactly five groups and boards premium first', () =>
   expect(premium.every((p) => p.boardingIndex < premium.length)).toBe(true)
 })
 
+// The §7 #2 correction, as a property. The old rule put elites at the front of
+// the group their SEAT earned, which on an outside-in scheme is perverse: aisles
+// are called last and elites disproportionately sit in aisles, so a top-tier
+// flyer boarded behind every basic-economy window passenger. Status is now an
+// input to the group itself.
+it('common_sense_5tier merges status into the group rather than sorting inside it', () => {
+  const { queue } = makeQueue(cleanCfg('a320neo', 'common_sense_5tier', 11, { loadFactor: 1.0 }))
+  const aisles = queue.filter((p) => p.seat.kind === 'Aisle')
+  const top = aisles.filter((p) => p.tier === 'elite_top').map((p) => p.boardingIndex)
+  const basic = aisles.filter((p) => p.tier === 'basic').map((p) => p.boardingIndex)
+  expect(top.length).toBeGreaterThan(0)
+  expect(basic.length).toBeGreaterThan(0)
+  expect(meanOf(top)).toBeLessThan(meanOf(basic))
+
+  // And the whole point: an elite in an AISLE seat is no longer stuck behind the
+  // entire basic-economy WINDOW population.
+  const basicWindows = queue
+    .filter((p) => p.seat.kind === 'Window' && p.tier === 'basic')
+    .map((p) => p.boardingIndex)
+  expect(basicWindows.length).toBeGreaterThan(0)
+  expect(meanOf(top)).toBeLessThan(Math.max(...basicWindows))
+})
+
+// Eight groups, seat location as the base rank, status shifting whole groups.
+// Checked as structure: eight is what Southwest prints, and window-before-aisle
+// is what they announced.
+it('southwest_2026 is wilma_zoned with a status ladder merged in', () => {
+  const { queue } = makeQueue(cleanCfg('a320neo', 'southwest_2026', 4, { loadFactor: 1.0 }))
+  const labels = []
+  for (const p of queue) if (!labels.includes(p.groupLabel)) labels.push(p.groupLabel)
+  expect(labels).toHaveLength(8)
+
+  const meanSlot = (kind) =>
+    meanOf(queue.filter((p) => p.seat.kind === kind).map((p) => p.boardingIndex))
+  expect(meanSlot('Window')).toBeLessThan(meanSlot('Middle'))
+  expect(meanSlot('Middle')).toBeLessThan(meanSlot('Aisle'))
+
+  const elite = queue.filter((p) => p.tier === 'elite_top').map((p) => p.boardingIndex)
+  const basic = queue.filter((p) => p.tier === 'basic').map((p) => p.boardingIndex)
+  expect(elite.length).toBeGreaterThan(0)
+  expect(basic.length).toBeGreaterThan(0)
+  expect(meanOf(elite)).toBeLessThan(meanOf(basic))
+})
+
+// Every carrier that boards by seat location promotes the whole booking to its
+// earliest-boarding member -- United's "same and highest applicable",
+// Lufthansa's "and companions". A run with `keepPartiesTogether` off is not a
+// model of anything anyone operates, so these strategies force it on.
+describe.each(['common_sense_5tier', 'southwest_2026'])('%s', (strategy) => {
+  it('makes party cohesion mandatory', () => {
+    const { queue } = makeQueue(
+      cfgFor('a320neo', strategy, 8, {
+        keepPartiesTogether: false,
+        nonComplianceRate: 0.0,
+        lateRate: 0.0,
+      }),
+    )
+    const seen = new Map()
+    queue.forEach((p, i) => {
+      if (!seen.has(p.partyId)) seen.set(p.partyId, [])
+      seen.get(p.partyId).push(i)
+    })
+    const multi = [...seen.values()].filter((v) => v.length > 1)
+    expect(multi.length).toBeGreaterThan(0)
+    for (const slots of multi) {
+      const want = slots.map((_, k) => slots[0] + k)
+      expect(slots).toEqual(want)
+    }
+  })
+})
+
 it('priority_5tier boards basic economy last', () => {
   const { queue } = makeQueue(cleanCfg('a320neo', 'priority_5tier', 3))
   const basic = queue.filter((p) => p.tier === 'basic').map((p) => p.boardingIndex)
   const others = queue.filter((p) => p.tier !== 'basic').map((p) => p.boardingIndex)
   expect(Math.min(...basic)).toBeGreaterThan(Math.max(...others))
+})
+
+// RESEARCH_AIRLINES 7 #6, as a property of the manifest rather than of any one
+// strategy: status is drawn front-biased, so the early groups of any
+// status-ordered scheme are spatially front-loaded rather than spread.
+it('concentrates status in the forward rows', () => {
+  const { ac, queue } = makeQueue(cfgFor('a320neo', 'random', 12, { loadFactor: 1.0 }))
+  const slotOf = (tier) => meanOf(queue.filter((p) => p.tier === tier).map((p) => p.seat.rowSlot))
+  const mid = (ac.rowSlots.length - 1) / 2
+  // All three status buckets share one tilt -- the model says "status sits
+  // forward", not "top tier sits further forward than cardholders" -- so the
+  // assertion is on status-vs-basic, not on an ordering within status.
+  const status = meanOf(
+    queue
+      .filter((p) => ['elite_top', 'elite_mid', 'cardholder'].includes(p.tier))
+      .map((p) => p.seat.rowSlot),
+  )
+  expect(status).toBeLessThan(mid)
+  expect(slotOf('basic')).toBeGreaterThan(mid)
+  expect(status).toBeLessThan(slotOf('basic'))
+})
+
+it('restores the uniform status mix when the forward bias is switched off', () => {
+  const { ac, queue } = makeQueue(
+    cfgFor('a320neo', 'random', 12, { loadFactor: 1.0, eliteForwardBias: 0.0 }),
+  )
+  const slotOf = (tier) => meanOf(queue.filter((p) => p.tier === tier).map((p) => p.seat.rowSlot))
+  const mid = (ac.rowSlots.length - 1) / 2
+  // Uniform means every tier averages around mid-cabin, within sampling noise.
+  for (const tier of ['elite_top', 'cardholder', 'basic', 'standard']) {
+    expect(Math.abs(slotOf(tier) - mid)).toBeLessThan(mid * 0.35)
+  }
 })
 
 it('slowest_first front-loads the two-bag passengers', () => {
@@ -177,12 +281,33 @@ it('does produce interference under random boarding', () => {
 
 // --- universal post-processing ---------------------------------------------
 
+// Step 1 of the pipeline, checked against steps 2-4 rather than in spite of
+// them. Party cohesion drags a preboard's whole party forward with them, so the
+// preboard BLOCK is a property of the manifest rather than a magic number, and
+// step 3 is entitled to jitter anybody. Step 4 can still draw a preboard as a
+// late arrival and send them to the very back -- that is the model saying they
+// missed the call, and it is covered separately below.
 it('lifts preboards to the front', () => {
-  const { queue } = makeQueue(cfgFor('a320neo', 'random', 5, { preboardRate: 0.15 }))
+  const cfg = cfgFor('a320neo', 'random', 5, { preboardRate: 0.15, lateRate: 0.0 })
+  const { queue } = makeQueue(cfg)
   const pre = queue.filter((p) => p.isPreboard)
   expect(pre.length).toBeGreaterThan(0)
-  expect(Math.max(...pre.map((p) => p.boardingIndex))).toBeLessThan(pre.length + 30)
   expect(pre.every((p) => p.groupLabel === 'Preboard')).toBe(true)
+  const preParties = new Set(pre.map((p) => p.partyId))
+  const block = queue.filter((p) => preParties.has(p.partyId))
+  expect(Math.max(...pre.map((p) => p.boardingIndex))).toBeLessThan(
+    block.length + cfg.complianceJitter,
+  )
+})
+
+// The control for the test above: lateness is drawn for everybody, preboards
+// included, so the `lateRate: 0` there is deliberate scoping and not a bug
+// being hidden.
+it('can still draw a preboard as a late arrival', () => {
+  const { queue } = makeQueue(cfgFor('a320neo', 'random', 5, { preboardRate: 0.15, lateRate: 0.5 }))
+  const pre = queue.filter((p) => p.isPreboard)
+  expect(pre.length).toBeGreaterThan(0)
+  expect(Math.max(...pre.map((p) => p.boardingIndex))).toBeGreaterThan(queue.length / 2)
 })
 
 it('can switch preboardFirst off', () => {

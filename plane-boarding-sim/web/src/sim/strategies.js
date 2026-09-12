@@ -1,5 +1,5 @@
 /**
- * The fifteen boarding strategies, plus the universal post-processing pipeline.
+ * The sixteen boarding strategies, plus the universal post-processing pipeline.
  *
  * Port of `python/plane_boarding/strategies.py`.
  *
@@ -18,11 +18,50 @@
  * does not deliver its theoretical 2x in the field.
  */
 import { AISLE_SEAT, MIDDLE, WINDOW } from './aircraft.js'
+import {
+  SERVICE_PHASE_BEHAVIOUR,
+  SERVICE_STREAM_BASE,
+  SERVICE_STREAM_STRIDE,
+} from './config.js'
+import { PCG32 } from './rng.js'
 import { floorDiv, sortByKey, sortByTuple } from './pyutil.js'
 
 /** Tiers that buy you an earlier slot within your group (never ahead of everyone). */
 export const ELITE_TIERS = ['first', 'business', 'premium', 'elite_top', 'elite_mid']
 const ELITE_SET = new Set(ELITE_TIERS)
+
+/**
+ * How many boarding groups a status tier is worth, for the schemes that merge
+ * status INTO the group assignment rather than sorting within a group.
+ *
+ * This is the construction every real carrier uses, and the one Southwest
+ * shipped in January 2026: group = f(where you sit, what you are worth), one
+ * merged ordering. The alternative -- "elites board at the front of their
+ * assigned group" -- is done by nobody, and on an outside-in scheme it is
+ * actively perverse: elites disproportionately buy AISLE seats, outside-in
+ * calls aisles last, so it seats a top-tier flyer behind every basic-economy
+ * window passenger. See docs/RESEARCH_AIRLINES.md 7 #2.
+ */
+const STATUS_GROUP_SHIFT = {
+  first: -3,
+  business: -3,
+  elite_top: -3,
+  premium: -2,
+  elite_mid: -2,
+  cardholder: -1,
+  standard: 0,
+  basic: 1,
+}
+
+/**
+ * Groups earlier (negative) or later (positive) this passenger's status is
+ * worth. A premium cabin outranks any economy status the passenger also holds.
+ */
+function statusShift(p) {
+  const cls = p.seat ? p.seat.classKey : 'economy'
+  if (cls !== 'economy') return STATUS_GROUP_SHIFT[cls] ?? 0
+  return STATUS_GROUP_SHIFT[p.tier] ?? 0
+}
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -363,40 +402,131 @@ function stratPriority5tier(pax, ac, cfg, rng) {
  * first -- and applies real flow logic to the ~85% of the aircraft that is
  * economy, using five gate-announceable groups. It is a coarse reverse pyramid
  * quantised to what a boarding pass can print, preserving the two effects that
- * actually matter: outside-in kills seat shuffles, rear-first spreads the
- * aisle. Elite status buys the front of your group rather than the front of the
- * aeroplane.
+ * actually matter: outside-in kills seat shuffles, rear-first spreads the aisle.
+ *
+ * **Status is an input to the group assignment, not a sort within it.** The seat
+ * location proposes a group; the passenger's status ladder then moves them
+ * earlier or later by a whole group or three, and the result is ONE merged
+ * ordering. That is the construction Southwest shipped in 2026 and the only one
+ * a revenue department will sign: a status flyer in an aisle seat lands in an
+ * early group, a basic-economy flyer in an aisle seat lands in the last one. The
+ * previous rule -- elites at the front of their assigned group -- looked like a
+ * compromise and was in fact the worst of both worlds, since outside-in calls
+ * aisles last and elites are disproportionately in aisles.
+ * See docs/RESEARCH_AIRLINES.md 7 #2.
+ *
+ * Party cohesion is MANDATORY here rather than optional (registry flag
+ * `requiresCohesion`). Every deployed carrier that boards by seat location
+ * promotes the whole booking to its earliest-boarding member -- United's "same
+ * and highest applicable", Lufthansa's "and companions" -- so a run of this
+ * strategy with cohesion off is not a model of anything real.
  */
 function stratCommonSense5tier(pax, ac, cfg, rng) {
   const econSlots = ac.economyRowSlots
   const mid = econSlots.length ? econSlots[floorDiv(econSlots.length, 2)] : 0
 
-  const premium = []
-  const groups = [[], [], [], []] // groups 2..5
-  for (const p of pax) {
-    if (p.seat.classKey !== 'economy') {
-      premium.push(p)
-      continue
-    }
-    const rear = p.rowSlot >= mid
-    const kind = p.seat.kind
-    if (kind === WINDOW) groups[rear ? 0 : 1].push(p)
-    else if (kind === MIDDLE) groups[rear ? 1 : 2].push(p)
-    else groups[rear ? 2 : 3].push(p)
-  }
-
   const names = [
-    'Group 1 (premium cabin)',
+    'Group 1 (premium + top status)',
     'Group 2 (rear windows)',
     'Group 3 (fwd windows + rear middles)',
     'Group 4 (fwd middles + rear aisles)',
-    'Group 5 (forward aisles)',
+    'Group 5 (forward aisles + basic economy)',
   ]
-  const out = label(elitesFirst(shuffled(rng, premium)), names[0])
-  for (let i = 0; i < groups.length; i++) {
-    const ordered = shuffled(rng, groups[i])
-    sortByKey(ordered, (p) => -p.rowSlot) // rear to front, shuffled within a row
-    for (const p of label(elitesFirst(ordered), names[i + 1])) out.push(p)
+  const nGroups = names.length
+
+  // Where seat location alone would put you: 0 = premium cabin, then the
+  // outside-in x rear-first ladder across groups 1..4.
+  const baseGroup = (p) => {
+    if (p.seat.classKey !== 'economy') return 0
+    const rear = p.rowSlot >= mid
+    const kind = p.seat.kind
+    if (kind === WINDOW) return rear ? 1 : 2
+    if (kind === MIDDLE) return rear ? 2 : 3
+    return rear ? 3 : 4
+  }
+
+  const buckets = names.map(() => [])
+  for (const p of pax) {
+    let g = baseGroup(p) + statusShift(p)
+    if (g < 0) g = 0
+    else if (g >= nGroups) g = nGroups - 1
+    buckets[g].push(p)
+  }
+
+  const out = []
+  for (let i = 0; i < buckets.length; i++) {
+    const ordered = shuffled(rng, buckets[i])
+    // Premium cabin ahead of everyone inside its group, then rear to front,
+    // shuffled within a row. The premium tie-break only bites in Group 1, where
+    // the status shift also lands top-tier economy passengers: the premium
+    // cabin boarding first is the commercially non-negotiable part this whole
+    // strategy is built around conceding, and rear-first sorting alone would put
+    // it behind the rear-seated elites it shares a group with.
+    sortByTuple(ordered, (p) => [p.seat.classKey === 'economy' ? 1 : 0, -p.rowSlot])
+    for (const p of label(ordered, names[i])) out.push(p)
+  }
+  return out
+}
+
+/**
+ * Southwest's post-open-seating scheme, live since 27 January 2026.
+ *
+ * The single most useful strategy in this file for the headline comparison,
+ * because it is a real converged design rather than a strawman: an airline that
+ * abandoned 53 years of open seating and, given a blank sheet, chose **WilMA x
+ * back-to-front merged with fare and status into eight groups**.
+ *
+ * Construction (docs/RESEARCH_AIRLINES.md 1.4):
+ *
+ *   * seat location gives a base rank -- window before middle before aisle as
+ *     the outer loop, rear before front within each -- so it is `wilma_zoned`
+ *     by another name;
+ *   * that rank is projected onto EIGHT groups, which is the number Southwest
+ *     actually prints;
+ *   * fare and status then shift you whole groups earlier (A-List Preferred,
+ *     Choice Extra, cardholders) or later (Basic), producing one merged
+ *     ordering rather than a status sort inside a location group.
+ *
+ * Eight groups rather than five is not cosmetic: finer quantisation preserves
+ * more of the underlying spatial order, and it is the difference between a
+ * scheme that announces its flow logic and one that only gestures at it.
+ */
+function stratSouthwest2026(pax, ac, cfg, rng) {
+  const bandList = bands(ac, cfg.zoneCount)
+  const nBands = bandList.length
+  const maxDepth = Math.max(1, ac.maxDepth)
+  const nCells = maxDepth * nBands
+  const nGroups = 8
+
+  // Deepest seat (window) first, then rearmost band first: identical to the
+  // emission order of `wilma_zoned`.
+  const locationRank = (p) => {
+    const depthRank = maxDepth - Math.max(1, Math.min(maxDepth, p.depth))
+    const bandRank = nBands - 1 - bandOf(p.rowSlot, bandList)
+    return depthRank * nBands + bandRank
+  }
+
+  const buckets = []
+  for (let i = 0; i < nGroups; i++) buckets.push([])
+  for (const p of pax) {
+    let g = floorDiv(locationRank(p) * nGroups, nCells)
+    g += statusShift(p)
+    if (g < 0) g = 0
+    else if (g >= nGroups) g = nGroups - 1
+    buckets[g].push(p)
+  }
+
+  const out = []
+  for (let i = 0; i < nGroups; i++) {
+    const ordered = shuffled(rng, buckets[i])
+    // WilMA still runs INSIDE each group, which is what Southwest's own
+    // material describes ("Group 1 ... reportedly the window subset first"). It
+    // matters most for the passengers a status shift dropped into a group their
+    // seat would not have earned: without this an A-List aisle seat called in
+    // Group 2 would board ahead of the Group 2 windows and undo the
+    // zero-interference property the scheme is built on.
+    sortByTuple(ordered, (p) => [-p.depth, -p.rowSlot])
+    for (const p of label(ordered, `Group ${i + 1} of ${nGroups}`)) out.push(p)
   }
   return out
 }
@@ -456,9 +586,38 @@ function stratSlowestFirst(pax, ac, cfg, rng) {
  * Order matters and is normative. Together these four steps are what separates
  * a paper result from a gate result: they are the frictions that shrink
  * Steffen's theoretical 2x to the ~20-25% airlines actually measure.
+ *
+ * Takes no RNG. It used to take the `order` stream for the non-compliance and
+ * lateness draws; those are per-passenger behaviours now and come from the
+ * passenger's own sub-stream, so the `order` stream is consumed only by the
+ * strategy function itself.
  */
-export function applyPostProcessing(queue, cfg, rng) {
+export function requiresCohesion(strategy) {
+  const entry = STRATEGIES[strategy]
+  return Boolean(entry && entry.requiresCohesion)
+}
+
+export function applyPostProcessing(queue, cfg) {
   let out = Array.from(queue)
+  // For most strategies `keepPartiesTogether` is a friction knob. For a
+  // strategy whose group assignment is a joint function of seat location and
+  // fare -- common_sense_5tier, southwest_2026 -- cohesion is part of the
+  // construction, because every carrier that boards that way promotes the whole
+  // booking to its earliest-boarding member. Those strategies force it on.
+  const cohere = cfg.keepPartiesTogether || requiresCohesion(cfg.strategy)
+
+  // Steps 3 and 4 draw a per-PASSENGER behaviour -- "does this person ignore
+  // their group" and "does this person turn up late" -- and both used to come
+  // off the shared `order` stream in queue order, which made them depend on the
+  // very ordering they are supposed to perturb. Drawn from the passenger's own
+  // sub-stream instead, the same traveller misbehaves in the same way under
+  // every strategy, which is what a paired comparison needs. The draw sequence
+  // within the stream is fixed -- compliance bernoulli, then the jitter randint
+  // if and only if that bernoulli came up, then the lateness bernoulli -- and
+  // its length therefore depends only on values that are themselves invariant.
+  // See ENGINE_SPEC 1.3.
+  const behaviourRng = (p) =>
+    new PCG32(cfg.seed, SERVICE_STREAM_BASE + p.id * SERVICE_STREAM_STRIDE + SERVICE_PHASE_BEHAVIOUR)
 
   // 1. Preboards. Stable, so the strategy's ordering survives among them.
   if (cfg.preboardFirst) {
@@ -473,7 +632,12 @@ export function applyPostProcessing(queue, cfg, rng) {
   //    first -- families self-organise so the window passenger goes in first.
   //    This deliberately runs AFTER preboarding, so a party containing a
   //    wheelchair passenger boards with them, which is what actually happens.
-  if (cfg.keepPartiesTogether) {
+  //    Cohesion is PROMOTE-TO-EARLIEST: the party is emitted whole at the
+  //    queue position of whichever member the strategy called first, never at a
+  //    mean or a latest position. That is what every carrier with a published
+  //    companion rule does (United "same and highest applicable", Lufthansa
+  //    "and companions").
+  if (cohere) {
     const members = new Map()
     for (const p of out) {
       let group = members.get(p.partyId)
@@ -498,11 +662,19 @@ export function applyPostProcessing(queue, cfg, rng) {
 
   // 3. Non-compliance. 15% of passengers ignore the group they were called in.
   const jitter = cfg.complianceJitter
-  if (cfg.nonComplianceRate > 0 && jitter > 0) {
+  const doJitter = cfg.nonComplianceRate > 0 && jitter > 0
+  const doLate = cfg.lateRate > 0
+  const behaviour = new Map()
+  if (doJitter || doLate) {
+    for (const p of out) behaviour.set(p.id, behaviourRng(p))
+  }
+
+  if (doJitter) {
     const keyed = []
     for (let i = 0; i < out.length; i++) {
       let k = 0
-      if (rng.bernoulli(cfg.nonComplianceRate)) k = rng.randint(2 * jitter + 1) - jitter
+      const r = behaviour.get(out[i].id)
+      if (r.bernoulli(cfg.nonComplianceRate)) k = r.randint(2 * jitter + 1) - jitter
       keyed.push({ a: i + k, b: i, p: out[i] })
     }
     sortByTuple(keyed, (t) => [t.a, t.b])
@@ -510,10 +682,10 @@ export function applyPostProcessing(queue, cfg, rng) {
   }
 
   // 4. Late arrivals -- the sprint from the connecting gate.
-  if (cfg.lateRate > 0) {
+  if (doLate) {
     const late = []
     const ontime = []
-    for (const p of out) (rng.bernoulli(cfg.lateRate) ? late : ontime).push(p)
+    for (const p of out) (behaviour.get(p.id).bernoulli(cfg.lateRate) ? late : ontime).push(p)
     out = ontime.concat(late)
   }
 
@@ -574,7 +746,9 @@ export const STRATEGIES = {
     family: 'outside-in',
     description:
       'Outside-in, and rear-to-front within each seat-column band. Adds aisle spreading to ' +
-      'WilMA without losing its zero-interference property.',
+      'WilMA without losing its zero-interference property. This is a live scheme, not a ' +
+      'proposal: it is the structure Southwest went to on 27 January 2026 -- see ' +
+      'southwest_2026 for the version with the fare and status ladder merged in.',
     fn: stratWilmaZoned,
   },
   steffen_perfect: {
@@ -582,8 +756,11 @@ export const STRATEGIES = {
     name: 'Steffen (perfect)',
     family: 'optimal',
     description:
-      'Alternating rows, window to aisle, alternating sides. The theoretical optimum -- and ' +
-      'unimplementable, which is exactly the point.',
+      'Alternating rows, window to aisle, alternating sides. The theoretical optimum, and ' +
+      'unimplementable -- but not mainly for the reason usually given. Ahead of passenger ' +
+      'compliance come mandatory party cohesion, alliance and status contractual obligations, ' +
+      'and the plain absence of any gate infrastructure for sequencing individual passengers. ' +
+      'Compliance is the reason this model can measure, not the binding one.',
     fn: stratSteffenPerfect,
   },
   steffen_modified: {
@@ -600,8 +777,11 @@ export const STRATEGIES = {
     name: 'Reverse pyramid',
     family: 'hybrid',
     description:
-      'Diagonal wave from rear-window to front-aisle. America West measured ~20% off full ' +
-      'flights with this in revenue service.',
+      'Diagonal wave from rear-window to front-aisle, and the best-evidenced flow method ever ' +
+      'flown: America West measured -2 minutes (~20%) on full flights and -21% departure ' +
+      'delays over the first three months (van den Briel et al., Interfaces 35(3):191-201, ' +
+      '2005). It disappeared through two merger integrations and no source gives a performance ' +
+      'reason. JAL\u2019s 2024 window-and-rear scheme is a coarse two-group descendant.',
     fn: stratReversePyramid,
   },
   rotating_zone: {
@@ -624,11 +804,13 @@ export const STRATEGIES = {
   },
   open_seating: {
     key: 'open_seating',
-    name: 'Open seating (Southwest legacy)',
+    name: 'Open seating (Southwest, 1971-2026)',
     family: 'open',
     description:
-      'No assigned seats; passengers choose on entering the cabin. Fast, because people ' +
-      'self-select to avoid climbing over each other.',
+      'RETIRED. No assigned seats; passengers choose on entering the cabin. Fast, because ' +
+      'people self-select to avoid climbing over each other. Southwest ran it for 53 years and ' +
+      'ended it on 27 January 2026; no airline of consequence now uses it, so this is a ' +
+      'historical baseline rather than a live option.',
     fn: stratOpenSeating,
   },
   priority_5tier: {
@@ -636,8 +818,13 @@ export const STRATEGIES = {
     name: '5-tier priority (revenue)',
     family: 'commercial',
     description:
-      'Preboard, premium, elites, main, basic economy. Sells queue position and has no spatial ' +
-      'logic at all.',
+      'Preboard, premium, elites, main, basic economy: the revenue-only case, representing ' +
+      'Delta, American and Air France. It has no DELIBERATE spatial logic, but it is not ' +
+      'spatially neutral -- status and premium cabins sit forward, so selling queue position ' +
+      'quietly buys front-to-back boarding. Compare against the revenue-then-flow carriers ' +
+      '(United, Lufthansa, ANA, JAL, BA, Southwest) modelled by wilma and southwest_2026. Tier ' +
+      'placement is carrier-dependent at the top: this models the generic US-legacy case with ' +
+      'First and Business in Tier 1, where American has preboarded them since 1 May 2025.',
     fn: stratPriority5tier,
   },
   common_sense_5tier: {
@@ -645,9 +832,24 @@ export const STRATEGIES = {
     name: '5-tier common sense',
     family: 'commercial',
     description:
-      'Premium cabin first (commercially fixed), then outside-in crossed with rear-first across ' +
-      'five printable groups. The best boarding you could actually sell.',
+      'Outside-in crossed with rear-first across five printable groups, with fare and status ' +
+      'merged INTO the group assignment rather than sorted within it, so a status flyer in an ' +
+      'aisle seat still boards early. The best boarding you could actually sell. Party cohesion ' +
+      'is mandatory, as it is for every carrier that boards by seat location.',
+    requiresCohesion: true,
     fn: stratCommonSense5tier,
+  },
+  southwest_2026: {
+    key: 'southwest_2026',
+    name: 'Southwest 2026 (WilMA x zones + status, 8 groups)',
+    family: 'commercial',
+    description:
+      'The real converged design: Southwest replaced 53 years of open seating on 27 January ' +
+      '2026 with window/middle/aisle boarded rear-to-front, merged with fare and Rapid Rewards ' +
+      'status into eight numbered groups. Live on roughly 4,000 daily flights, which makes this ' +
+      'the benchmark any proposal in this list has to beat.',
+    requiresCohesion: true,
+    fn: stratSouthwest2026,
   },
   by_bags: {
     key: 'by_bags',
@@ -655,7 +857,12 @@ export const STRATEGIES = {
     family: 'experimental',
     description:
       "Zero-bag passengers first, then one, then two. Tests the 'bags are the bottleneck' " +
-      'hypothesis directly.',
+      'hypothesis directly -- and the field evidence says bags win: Spirit reportedly cut ' +
+      'boarding by ~6 minutes by charging for carry-ons, roughly three times the best claimed ' +
+      'ordering benefit, from a pricing change with no gate process change at all. Boarding has ' +
+      'slowed from ~15 minutes in the 1970s to 30-40 for ~140 passengers today. Note the ' +
+      'literature finds the REVERSE order (most luggage first) is what shortens boarding, so ' +
+      'this particular sort is a foil.',
     fn: stratByBags,
   },
   slowest_first: {
@@ -683,5 +890,5 @@ export function buildOrder(pax, ac, cfg, rng) {
       `strategy '${cfg.strategy}' returned ${queue.length} of ${pax.length} passengers`,
     )
   }
-  return applyPostProcessing(queue, cfg, rng)
+  return applyPostProcessing(queue, cfg)
 }

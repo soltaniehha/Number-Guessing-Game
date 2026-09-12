@@ -95,7 +95,7 @@ export { geometryPayload }
 export { buildConfig, ConfigError, SimConfig, ticksFor } from './config.js'
 export { PCG32 } from './rng.js'
 export { Aggregate, percentile } from './metrics.js'
-export { BatchResult, compareStrategies, loadSweep, runBatch } from './batch.js'
+export { BatchResult, SWEEPABLE, compareStrategies, loadSweep, paramSweep, runBatch } from './batch.js'
 export { run, simulate } from './engine.js'
 export { aircraftIds, getAircraft } from './aircraft.js'
 export { STRATEGY_REGISTRY }

@@ -13,6 +13,8 @@ import {
   getAircraft,
 } from '../../src/sim/aircraft.js'
 import { ConfigError } from '../../src/sim/config.js'
+import { simulate } from '../../src/sim/engine.js'
+import { cfgFor } from './helpers.js'
 
 /**
  * Declared totals from the cabin research. These are the numbers the roster has
@@ -170,4 +172,40 @@ describe('monuments', () => {
     // Three galley/lav banks are declared, so three inter-row gaps exceed pitch.
     expect(gaps.filter((g) => g > 1e-9).length).toBe(3)
   })
+})
+
+
+// The per-letter geometry map is keyed by letter, and `resolve` looks each
+// letter up again per row. A layout that used "D" twice would silently give both
+// D seats whichever position came last -- same depth, same block, same bin run --
+// and the only symptom would be a boarding time that is quietly wrong. Nothing
+// in the shipped roster does this; the point is that nothing can.
+it('rejects a layout that repeats a seat letter', () => {
+  expect(() => analyseLayout(['A', 'B', 'C', '|', 'D', 'E', 'F'])).not.toThrow() // the control
+  expect(() => analyseLayout(['A', 'B', 'D', '|', 'D', 'E', 'F'])).toThrow(/repeats seat letter "D"/)
+  expect(() => analyseLayout(['A', '|', 'A'])).toThrow(/repeats seat letter "A"/)
+  expect(() => analyseLayout(['A', 'B', 'D', '|', 'D', 'E', 'F'])).toThrow(ConfigError)
+})
+
+// `arrive()` used to read a missing bin run as `fill = 1.0`, i.e. as a bin that
+// happens to be completely full, and charge the passenger the whole
+// binCongestionWeight penalty for it. A bin run absent above its own row is not
+// congestion, it is a seat map and a capacity table that disagree, and the two
+// can only disagree because of a bug. Constructed by hand because no shipped
+// airframe can produce it -- which is exactly why the branch was never noticed.
+it('treats a seat whose bin run does not exist as an error, not a full bin', () => {
+  const ac = getAircraft('a320neo')
+  const seat = ac.seats[10]
+  const original = seat.binRun
+  try {
+    seat.binRun = 99
+    expect(() =>
+      simulate(
+        cfgFor('a320neo', 'random', 1, { loadFactor: 1.0, bagWeights: { 0: 0, 1: 1, 2: 0 } }),
+        ac,
+      ),
+    ).toThrow(/declares binRun 99/)
+  } finally {
+    seat.binRun = original
+  }
 })

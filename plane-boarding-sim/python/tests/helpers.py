@@ -5,10 +5,13 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from plane_boarding.aircraft import get_aircraft
-from plane_boarding.config import build_config, SimConfig
+from plane_boarding.config import ORDER_STREAM, PAX_STREAM, build_config, SimConfig
 from plane_boarding.passengers import generate
 from plane_boarding.rng import PCG32
 from plane_boarding.strategies import build_order
+
+#: Every airframe in the roster, in roster order. Mirrors `web/test/sim/helpers.js`.
+ALL_AIRCRAFT = ["e175", "a320neo", "b737_max8", "a220_300", "b777_300er", "b787_9"]
 
 #: A scenario stripped of every source of ordering noise. Used wherever a test
 #: needs to assert a property of the *strategy itself* rather than of the
@@ -42,5 +45,5 @@ def clean_cfg(aircraft: str = "a320neo", strategy: str = "random", seed: int = 1
 def make_queue(cfg: SimConfig):
     """Reproduce the engine's manifest + ordering without running the simulation."""
     ac = get_aircraft(cfg.aircraftId)
-    pax = generate(PCG32(cfg.seed, 1), ac, cfg)
-    return ac, build_order(pax, ac, cfg, PCG32(cfg.seed, 2))
+    pax = generate(PCG32(cfg.seed, PAX_STREAM), ac, cfg)
+    return ac, build_order(pax, ac, cfg, PCG32(cfg.seed, ORDER_STREAM))

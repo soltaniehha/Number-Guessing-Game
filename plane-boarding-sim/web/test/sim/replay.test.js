@@ -113,7 +113,7 @@ describe('the public interface src/lib/engineBridge.js expects', () => {
     expect(Object.keys(AIRCRAFT).sort()).toEqual(
       ['a220_300', 'a320neo', 'b737_max8', 'b777_300er', 'b787_9', 'e175'],
     )
-    expect(Object.keys(STRATEGIES)).toHaveLength(15)
+    expect(Object.keys(STRATEGIES)).toHaveLength(16)
     for (const [key, entry] of Object.entries(STRATEGIES)) {
       expect(entry).toEqual({
         key,

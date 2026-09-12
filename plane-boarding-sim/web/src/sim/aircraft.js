@@ -146,6 +146,27 @@ export function analyseLayout(layout) {
     throw new ConfigError(`layout ${JSON.stringify(layout)} has no '${AISLE}' aisle marker`)
   }
 
+  // Everything below is keyed by seat LETTER, and `resolve` looks the letter up
+  // again per row to build the seats. A layout that repeats a letter would
+  // therefore silently collapse two physically distinct positions onto one set
+  // of geometry -- both "D" seats in a 3-3-3 would get the depth, block and bin
+  // run of whichever came last, and the error would show up only as a boarding
+  // time that is quietly wrong. Fail at load instead.
+  const seenLetters = new Map()
+  for (let i = 0; i < layout.length; i++) {
+    const c = layout[i]
+    if (c === AISLE) continue
+    if (seenLetters.has(c)) {
+      throw new ConfigError(
+        `layout ${JSON.stringify(layout)} repeats seat letter ${JSON.stringify(c)} at ` +
+          `positions ${seenLetters.get(c)} and ${i}. Seat letters index this cabin's ` +
+          `per-letter geometry (aisle, depth, block, bin run), so they must be unique ` +
+          `within a layout.`,
+      )
+    }
+    seenLetters.set(c, i)
+  }
+
   // Bin runs: maximal seat groups between aisle markers.
   const runs = []
   let current = []

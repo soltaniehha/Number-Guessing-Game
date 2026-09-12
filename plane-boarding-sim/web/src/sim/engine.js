@@ -30,10 +30,18 @@ import {
   BODY_DEPTH,
   ConfigError,
   DESIRED_HEADWAY,
+  DOOR_STREAM_BASE,
   MAX_SIM_SECONDS,
   MIN_SPEED_FRACTION,
+  ORDER_STREAM,
+  PAX_STREAM,
   QUEUED,
   SEATED,
+  SERVICE_PHASE_BIN,
+  SERVICE_PHASE_SHUFFLE,
+  SERVICE_PHASE_STOW,
+  SERVICE_STREAM_BASE,
+  SERVICE_STREAM_STRIDE,
   SHUFFLING,
   STOWING,
   WALKING,
@@ -185,6 +193,30 @@ class OpenSeatPicker {
     this.rank = KIND_RANK[policy]
   }
 
+  /**
+   * Refresh the nearest-seated-neighbour distance for every free seat.
+   *
+   * This is O(free seats) per seating, so O(S^2) over a boarding, and it is the
+   * obvious thing to blame for open seating costing ~2-3x a normal strategy. It
+   * is not the cause, and it was measured rather than reasoned about: on a b777
+   * at 90% load it is **2.5% of the run**. The quadratic that actually costs is
+   * the `minByTuple` in `take` below -- one linear scan of the free pool per
+   * door release, ~54% of the run -- and `front_first`, which never calls this
+   * method at all, is the slowest policy of the four.
+   *
+   * A note for whoever reaches for this again. The port left it alone on the
+   * grounds that `giveBack` can reinsert a seat that missed intervening
+   * updates. **That reasoning is wrong**: `take` and `giveBack` are adjacent
+   * statements in the door-release loop with no `sitDown` between them, so a
+   * seat is never out of the pool across an `onSeated` call. The reason to leave
+   * it alone is the measurement above -- optimising 2.5% cannot help, and every
+   * way of speeding up `take` that is worth having (squared distances, a spatial
+   * index) changes floating-point tie-breaking, which changes which seat is
+   * chosen, which changes the draw sequence. A lazily revalidated priority queue
+   * in `take` WOULD be provably identical, because `nearest` only ever decreases
+   * and the sort key ends in `s.index` so the order is total; that is the change
+   * to make if this ever matters.
+   */
   onSeated(seat) {
     if (this.policy !== 'avoid_neighbours') return
     const sx = seat.x
@@ -242,6 +274,11 @@ class OpenSeatPicker {
 /**
  * One door's jetbridge queue.
  *
+ * Each door owns its own PCG32 stream, advanced once per release. The k-th
+ * person to walk through a given door therefore waits the same drawn gap no
+ * matter which strategy put them there, which is what makes the door arrival
+ * process cancel exactly in a paired comparison (ENGINE_SPEC 1.3).
+ *
  * `arrivalTick` is when the CURRENT head of the queue reaches the door, and it
  * advances by one exponential draw per release regardless of whether the aisle
  * let that passenger in. That distinction matters more than it looks: the door
@@ -251,11 +288,12 @@ class OpenSeatPicker {
  * roughly doubles the modelled boarding time.
  */
 class DoorState {
-  constructor(door) {
+  constructor(door, seed, index) {
     this.door = door
     this.queue = []
     this.cursor = 0
     this.arrivalTick = 0
+    this.rng = new PCG32(seed, DOOR_STREAM_BASE + index)
   }
 }
 
@@ -279,9 +317,8 @@ export function run(cfg, ac = null, recordReplay = false, frameInterval = 0.25) 
   const doors = ac.resolveDoors(cfg.doors)
   const openSeating = cfg.strategy === OPEN_SEATING
 
-  const rngPax = new PCG32(cfg.seed, 1)
-  const rngOrder = new PCG32(cfg.seed, 2)
-  const rngSim = new PCG32(cfg.seed, 3)
+  const rngPax = new PCG32(cfg.seed, PAX_STREAM)
+  const rngOrder = new PCG32(cfg.seed, ORDER_STREAM)
 
   const pax = generate(rngPax, ac, cfg)
   const queue = pax.length ? buildOrder(pax, ac, cfg, rngOrder) : []
@@ -327,6 +364,7 @@ export function run(cfg, ac = null, recordReplay = false, frameInterval = 0.25) 
   const pblockid = new Int32Array(n)
   const pbinrun = new Int32Array(n)
   const pparty = new Int32Array(n)
+  const ppaxid = new Int32Array(n)
   const pseat = new Array(n).fill(null)
 
   for (const p of queue) {
@@ -335,6 +373,10 @@ export function run(cfg, ac = null, recordReplay = false, frameInterval = 0.25) 
     pmult[i] = p.stowMultiplier
     pspeed[i] = p.walkSpeed
     pparty[i] = p.partyId
+    // The PASSENGER id, not the boarding index: it is assigned in canonical
+    // seat order off the `pax` stream and is therefore the same person under
+    // every strategy. Keying the service streams on it is the whole point.
+    ppaxid[i] = p.id
     if (!openSeating) {
       const s = p.seat
       pseat[i] = s
@@ -359,7 +401,7 @@ export function run(cfg, ac = null, recordReplay = false, frameInterval = 0.25) 
   }
 
   // ---- doors ------------------------------------------------------------
-  const doorStates = doors.map((d) => new DoorState(d))
+  const doorStates = doors.map((d, i) => new DoorState(d, cfg.seed, i))
   const doorById = new Map()
   for (const ds of doorStates) doorById.set(ds.door.id, ds)
   for (const p of queue) doorById.get(p.doorId).queue.push(p.boardingIndex)
@@ -394,8 +436,32 @@ export function run(cfg, ac = null, recordReplay = false, frameInterval = 0.25) 
 
   const wake = new Map()
 
+  // ---- per-passenger service streams (ENGINE_SPEC 1.3) ------------------
+  // One PCG32 per passenger per service phase, keyed on the passenger id. Built
+  // lazily: a passenger with no bags never needs a stow stream, and most
+  // passengers never need a bin-search one.
+  //
+  // Phases are SEPARATE streams rather than a single per-passenger sequence
+  // because two of them consume a number of draws that legitimately depends on
+  // the boarding order -- how many bin searches you make depends on who filled
+  // the bin, how many shuffle movements you make depends on who is already
+  // sitting there. Sharing one stream would let that variable count shift every
+  // later draw and reintroduce exactly the order dependence this removes.
+  const seed = cfg.seed
+  const stowStreams = new Array(n).fill(null)
+  const binStreams = new Array(n).fill(null)
+  const shuffleStreams = new Array(n).fill(null)
+
+  function serviceRng(cache, pid, phase) {
+    let r = cache[pid]
+    if (r === null) {
+      r = new PCG32(seed, SERVICE_STREAM_BASE + ppaxid[pid] * SERVICE_STREAM_STRIDE + phase)
+      cache[pid] = r
+    }
+    return r
+  }
+
   // ---- local bindings for the hot loop ----------------------------------
-  const rng = rngSim
   const wShape = cfg.stowWeibullShape
   const wScale = cfg.stowWeibullScale
   const tLo = cfg.shuffleMoveMin
@@ -479,16 +545,18 @@ export function run(cfg, ac = null, recordReplay = false, frameInterval = 0.25) 
    * Searching outward and gate-checking are extrapolation, not literature -- no
    * published boarding paper puts a number on them.
    */
-  function stowPenalty(slot, run, bags) {
+  function stowPenalty(pid, slot, run, bags) {
     let penalty = 0.0
     const caps = rowCaps[slot]
+    let rngBin = null
     for (let b = 0; b < bags; b++) {
       if (run < caps.length && binUsed[slot][run] < caps[run]) {
         binUsed[slot][run] += 1
         continue
       }
       binSearches += 1
-      const first = rng.bernoulli(0.5) ? 1 : -1
+      if (rngBin === null) rngBin = serviceRng(binStreams, pid, SERVICE_PHASE_BIN)
+      const first = rngBin.bernoulli(0.5) ? 1 : -1
       let placed = false
       for (let d = 1; d <= binRadius; d++) {
         for (const sgn of [first, -first]) {
@@ -577,7 +645,10 @@ export function run(cfg, ac = null, recordReplay = false, frameInterval = 0.25) 
       else interTwo += 1
     }
     let dur = 0.0
-    for (let k = 0; k < moves; k++) dur += rng.triangular(tLo, tMode, tHi)
+    if (moves) {
+      const rngShuf = serviceRng(shuffleStreams, pid, SERVICE_PHASE_SHUFFLE)
+      for (let k = 0; k < moves; k++) dur += rngShuf.triangular(tLo, tMode, tHi)
+    }
     dur *= pmult[pid]
     pshuf[pid] = dur
     if (dur > 0.0) {
@@ -618,13 +689,29 @@ export function run(cfg, ac = null, recordReplay = false, frameInterval = 0.25) 
     const slot = prow[pid]
     const run = pbinrun[pid]
     const caps = rowCaps[slot]
-    const cap = run < caps.length ? caps[run] : 0
+    if (run >= caps.length) {
+      // The seat says it stows under bin run `run`, and that run does not exist
+      // above its own row. That is a broken geometry, not a full bin: treating
+      // it as one (the old `: 1.0`) silently charged the passenger the maximum
+      // bin-congestion penalty and hid the fault.
+      const seat = pseat[pid]
+      throw new ConfigError(
+        `${ac.id}: seat ${seat ? seat.id : '?'} at row slot ${slot} declares binRun ` +
+          `${run}, but that row has only ${caps.length} bin run(s). The seat map and ` +
+          `the per-row bin capacities disagree.`,
+      )
+    }
+    const cap = caps[run]
+    // cap === 0 is a different thing entirely and IS legitimate: a bin run
+    // declared with zero capacity (binBagsPerRowSide = 0) is full because it
+    // never had room, so maximum congestion is the right answer there.
     const fill = cap > 0 ? binUsed[slot][run] / cap : 1.0
     let base = 0.0
-    for (let b = 0; b < bags; b++) base += rng.weibull(wShape, wScale)
+    const rngStow = serviceRng(stowStreams, pid, SERVICE_PHASE_STOW)
+    for (let b = 0; b < bags; b++) base += rngStow.weibull(wShape, wScale)
     let dur = base * pmult[pid] * (1.0 + binWeight * fill * fill)
     const before = gateChecks
-    dur += stowPenalty(slot, run, bags)
+    dur += stowPenalty(pid, slot, run, bags)
     pgatechecked[pid] = gateChecks - before
     pstow[pid] = dur
     if (dur > 0.0) {
@@ -674,7 +761,7 @@ export function run(cfg, ac = null, recordReplay = false, frameInterval = 0.25) 
       ds.cursor += 1
       // Cumulative, NOT `tick + ...`: the jetbridge queue keeps filling while
       // the aisle is blocked, so a backlog discharges at once.
-      ds.arrivalTick += ticksFor(rng.exponential(doorMean), dt)
+      ds.arrivalTick += ticksFor(ds.rng.exponential(doorMean), dt)
       if (Math.abs(ptarget[pid] - px[pid]) < 1e-9) {
         removeFirst(laneWalk[lane], pid)
         arrive(pid, t, tick)
@@ -875,9 +962,17 @@ export function run(cfg, ac = null, recordReplay = false, frameInterval = 0.25) 
     for (let pid = 0; pid < n; pid++) if (pstate[pid] !== SEATED) psit[pid] = total
   }
 
-  // final sample so the curves close on the true end time
+  // final sample so the curves close on the true end time.
+  //
+  // The aisle count is the REAL lane occupancy, not `n - seatedCount`. On a run
+  // that hit MAX_SIM_SECONDS the difference is everybody still waiting on the
+  // jetbridge -- they are QUEUED, not in the aisle -- and counting them here put
+  // a spike on the end of the aisle-occupancy chart that was pure artefact. On a
+  // completed run both expressions are zero.
+  let finalInAisle = 0
+  for (const occ of laneOcc) finalInAisle += occ.length
   seatedCurve.push({ t: pyRound(total, 6), seated: seatedCount })
-  aisleCurve.push({ t: pyRound(total, 6), count: completed ? 0 : n - seatedCount })
+  aisleCurve.push({ t: pyRound(total, 6), count: finalInAisle })
   if (recordReplay) {
     framesState.push(Array.from(pstate))
     const row = new Array(n)
@@ -891,6 +986,11 @@ export function run(cfg, ac = null, recordReplay = false, frameInterval = 0.25) 
   let stowTotal = 0.0
   let shufTotal = 0.0
   let blockedTotal = 0.0
+  // Two different questions, kept apart on purpose (ENGINE_SPEC 7):
+  //   aisleTimes = sit - enter  -- "how long was I stuck in the aisle"
+  //   sits       = sit          -- "how long from doors-open until I sat down",
+  //                                which includes the jetbridge queue
+  const aisleTimes = []
   const sits = []
   for (const p of queue) {
     const i = p.boardingIndex
@@ -901,6 +1001,7 @@ export function run(cfg, ac = null, recordReplay = false, frameInterval = 0.25) 
     stowTotal += pstow[i]
     shufTotal += pshuf[i]
     blockedTotal += pblocked[i]
+    aisleTimes.push(sit - enter)
     sits.push(sit)
     records.push({
       id: p.id,
@@ -981,6 +1082,7 @@ export function run(cfg, ac = null, recordReplay = false, frameInterval = 0.25) 
     sequencing = pyRound(m, 6)
   }
 
+  const sortedAisle = aisleTimes.slice().sort((a, b) => a - b)
   const sortedSits = sits.slice().sort((a, b) => a - b)
   const result = {
     totalSeconds: pyRound(total, 6),
@@ -1006,9 +1108,25 @@ export function run(cfg, ac = null, recordReplay = false, frameInterval = 0.25) 
     gateChecks,
     binSearches,
     aisleBlockEvents: blockEvents,
-    p50TimeToSeat: pyRound(percentile(sortedSits, 0.5), 6),
-    p90TimeToSeat: pyRound(percentile(sortedSits, 0.9), 6),
-    maxTimeToSeat: sortedSits.length ? pyRound(sortedSits[sortedSits.length - 1], 6) : 0.0,
+    // Time from crossing the aircraft door to being seated. This is the
+    // quantity `perPassenger[].timeInAisle` already held and the one the
+    // "passenger wait time" chart exists to show: a fast mean hiding a
+    // miserable tail. It used to be computed off `sitTime`, which made the
+    // reported maximum identically `totalSeconds` on every completed run.
+    p50AisleSeconds: pyRound(percentile(sortedAisle, 0.5), 6),
+    p90AisleSeconds: pyRound(percentile(sortedAisle, 0.9), 6),
+    maxAisleSeconds: sortedAisle.length ? pyRound(sortedAisle[sortedAisle.length - 1], 6) : 0.0,
+    // Time from the start of boarding to being seated -- the same wait plus
+    // however long you stood on the jetbridge. There is deliberately no `max`
+    // here: the last person to sit down sits at `totalSeconds` by definition,
+    // so a maximum of this series is not a statistic.
+    p50BoardingWaitSeconds: pyRound(percentile(sortedSits, 0.5), 6),
+    p90BoardingWaitSeconds: pyRound(percentile(sortedSits, 0.9), 6),
+    // Deprecated aliases, kept so existing consumers keep working. They now
+    // carry the AISLE quantity, i.e. they are finally what their name says.
+    p50TimeToSeat: pyRound(percentile(sortedAisle, 0.5), 6),
+    p90TimeToSeat: pyRound(percentile(sortedAisle, 0.9), 6),
+    maxTimeToSeat: sortedAisle.length ? pyRound(sortedAisle[sortedAisle.length - 1], 6) : 0.0,
     throughputPaxPerMin: total > 0 ? pyRound(n / (total / 60.0), 6) : 0.0,
     completed,
     doorStats,

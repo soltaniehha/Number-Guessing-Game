@@ -4,11 +4,19 @@
  * Port of `python/plane_boarding/batch.py`.
  *
  * One deliberate design choice: every strategy in a comparison is run against
- * the **same seed sequence**. Because the `pax` stream is seeded independently
- * of the `order` stream, each strategy faces an identical passenger manifest --
- * same bags, same walk speeds, same parties. This is common random numbers, and
- * it removes the manifest as a source of between-strategy variance, so a 20-run
- * comparison discriminates about as well as a few hundred independent runs.
+ * the **same seed sequence**. Each strategy then faces an identical passenger
+ * manifest -- same bags, same walk speeds, same parties -- because the `pax`
+ * stream is seeded independently of the `order` stream, AND each passenger's own
+ * service draws come from sub-streams keyed on that passenger rather than on
+ * when they happen to board (ENGINE_SPEC 1.3). So the same traveller stows the
+ * same bag in the same time whatever the boarding order, and the k-th arrival at
+ * a door waits the same drawn gap. This is common random numbers, and it removes
+ * the manifest and the service draws as sources of between-strategy variance, so
+ * a 20-run comparison discriminates about as well as a few hundred independent
+ * runs.
+ *
+ * What it does NOT remove, and cannot, is the interaction: a given manifest
+ * suits some orderings better than others, and that is the effect measured.
  */
 import { getAircraft } from './aircraft.js'
 import { simulate } from './engine.js'
@@ -34,7 +42,12 @@ export class BatchResult {
     this.totalSeconds = new Aggregate(results.map((r) => r.totalSeconds))
     this.gateChecks = new Aggregate(results.map((r) => Number(r.gateChecks)))
     this.throughput = new Aggregate(results.map((r) => r.throughputPaxPerMin))
-    this.timeToSeat = new Aggregate(results.map((r) => r.p90TimeToSeat))
+    // p90 of the time each passenger spent between the aircraft door and their
+    // seat. `timeToSeat` keeps its name because consumers use it, but it is now
+    // the aisle quantity, i.e. what the name always claimed.
+    this.timeToSeat = new Aggregate(results.map((r) => r.p90AisleSeconds))
+    // p90 of the wait from doors-open to seated, jetbridge queue included.
+    this.boardingWait = new Aggregate(results.map((r) => r.p90BoardingWaitSeconds))
     this.sequencing = new Aggregate(results.map((r) => r.doorSequencing))
     this.paxCount = results.length ? results[0].paxCount : 0
     const agg = { none: 0.0, one: 0.0, two: 0.0, sameParty: 0.0 }
@@ -75,6 +88,8 @@ export class BatchResult {
       totalSeconds: this.totalSeconds.toDict(keepValues),
       gateChecks: this.gateChecks.toDict(),
       throughputPaxPerMin: this.throughput.toDict(),
+      p90AisleSeconds: this.timeToSeat.toDict(),
+      p90BoardingWaitSeconds: this.boardingWait.toDict(),
       p90TimeToSeat: this.timeToSeat.toDict(),
       doorSequencing: this.sequencing.toDict(),
       pairedVsBaseline: this.pairedVsBaseline ? this.pairedVsBaseline.toDict() : null,
@@ -116,22 +131,55 @@ export function compareStrategies(cfg, strategies = null, runs = 30, seedBase = 
 }
 
 /**
- * Boarding time vs seat load factor.
+ * Parameters the sweep axis is offered for, with the label a UI would print.
  *
- * Schultz found the relationship is linear for both one-door and two-door
- * aircraft across strategies, so a visibly non-linear sweep is a signal that
- * something in the model is saturating when it should not be.
+ * `loadFactor` is the classic one. `preboardRate` earns its place because the
+ * regime changes: at the shipped 2.5% preboarding is a prologue, but leisure
+ * routes credibly run 20-33% (RESEARCH_AIRLINES 3.2, 7 #9), and somewhere above
+ * ~15% the preboard block stops being a prologue and becomes the thing that sets
+ * the boarding time -- at which point the ordering strategy underneath it barely
+ * matters. That regime change is invisible unless you can sweep it.
  */
-export function loadSweep(cfg, loadFactors, strategies = null, runs = 15, seedBase = null, progress = null) {
+export const SWEEPABLE = {
+  loadFactor: 'seat load factor',
+  preboardRate: 'preboarding fraction of the cabin',
+  nonComplianceRate: 'fraction ignoring their called group',
+  lateRate: 'fraction arriving late',
+  stowPassSpeedFactor: 'squeeze-past speed fraction',
+  binCongestionWeight: 'bin-congestion stow penalty',
+  eliteForwardBias: 'forward concentration of status',
+  zoneCount: 'number of boarding zones',
+}
+
+/**
+ * Boarding time vs any one swept scenario parameter.
+ *
+ * Schultz found the load-factor relationship is linear for both one-door and
+ * two-door aircraft across strategies, so a visibly non-linear load sweep is a
+ * signal that something in the model is saturating when it should not be. The
+ * other axes have no such expectation -- `preboardRate` in particular is
+ * expected to bend, and finding where it bends is the point of sweeping it.
+ */
+export function paramSweep(cfg, param, values, strategies = null, runs = 15, seedBase = null, progress = null) {
+  if (!Object.prototype.hasOwnProperty.call(SWEEPABLE, param)) {
+    throw new Error(
+      `cannot sweep '${param}'; sweepable parameters: ${JSON.stringify(Object.keys(SWEEPABLE).sort())}`,
+    )
+  }
   const keys = strategies && strategies.length ? Array.from(strategies) : [cfg.strategy]
   const out = {}
   for (const key of keys) {
     const series = []
-    for (const lf of loadFactors) {
-      const cb = progress ? (i, total) => progress(key, lf, i, total) : null
-      series.push(runBatch(cfg.replace({ strategy: key, loadFactor: lf }), runs, seedBase, cb))
+    for (const v of values) {
+      const cb = progress ? (i, total) => progress(key, v, i, total) : null
+      series.push(runBatch(cfg.replace({ strategy: key, [param]: v }), runs, seedBase, cb))
     }
     out[key] = series
   }
   return out
+}
+
+/** Boarding time vs seat load factor. Thin wrapper over `paramSweep`. */
+export function loadSweep(cfg, loadFactors, strategies = null, runs = 15, seedBase = null, progress = null) {
+  return paramSweep(cfg, 'loadFactor', loadFactors, strategies, runs, seedBase, progress)
 }

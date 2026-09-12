@@ -159,6 +159,30 @@ class _OpenSeatPicker:
         self.rank = _KIND_RANK.get(policy)
 
     def on_seated(self, seat: Seat) -> None:
+        """Refresh the nearest-seated-neighbour distance for every free seat.
+
+        This is O(free seats) per seating, so O(S^2) over a boarding, and it is
+        the obvious thing to blame for open seating costing ~2-3x a normal
+        strategy. It is not the cause, and it was measured rather than reasoned
+        about: on a b777 at 90% load it is **2.5% of the run** (18 ms of 728 ms
+        under cProfile). The quadratic that actually costs is the `min()` in
+        `take` below -- one linear scan of the free pool per door release,
+        ~54% of the run -- and `front_first`, which never calls this method at
+        all, is the slowest policy of the four.
+
+        A note for whoever reaches for this again. The port left it alone on the
+        grounds that `give_back` can reinsert a seat that missed intervening
+        updates. **That reasoning is wrong**: `take` and `give_back` are adjacent
+        statements in the door-release loop with no `sit_down` between them, so a
+        seat is never out of the pool across an `on_seated` call. The reason to
+        leave it alone is the measurement above -- optimising 2.5% cannot help,
+        and every way of speeding up `take` that is worth having (squared
+        distances, a spatial index) changes floating-point tie-breaking, which
+        changes which seat is chosen, which changes the draw sequence. A lazily
+        revalidated priority queue in `take` WOULD be provably identical, because
+        `nearest` only ever decreases and the sort key ends in `s.index` so the
+        order is total; that is the change to make if this ever matters.
+        """
         if self.policy != "avoid_neighbours":
             return
         sx, sl = seat.x, seat.lateral
