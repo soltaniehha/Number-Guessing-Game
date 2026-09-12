@@ -50,7 +50,8 @@
   "nonComplianceRate": 0.15,
   "complianceJitter": 6,
   "lateRate": 0.01,
-  "openSeatingPolicy": "aisle_first",
+  "_openSeating_comment": "avoid_neighbours is the realistic default: unassigned-seat passengers demonstrably spread out rather than filling from the front. The literal front-filling policies (aisle_first / front_first) are kept because the product exposes them, but they are pathological -- everyone stows at the same advancing frontier, which fully serialises the boarding.",
+  "openSeatingPolicy": "avoid_neighbours",
 
   "dt": 0.1,
   "sampleInterval": 2.0,

@@ -18,7 +18,7 @@ locally destroys the alternating-row pattern.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Sequence, Tuple
 
 from .aircraft import AISLE_SEAT, Aircraft, MIDDLE, WINDOW
 from .config import SimConfig
@@ -212,23 +212,34 @@ def strat_reverse_pyramid(pax: List[Passenger], ac: Aircraft, cfg: SimConfig, rn
     """
     n_rows = max(1, len(ac.rowSlots) - 1)
     n_depth = max(1, ac.maxDepth - 1)
-    w_row, w_depth = 0.5, 0.5
+
+    # Weight the two terms so that ONE depth step is worth exactly ONE full
+    # sweep of the cabin. That is what makes the wave diagonal rather than
+    # either a row sweep or plain outside-in: the front windows board at the
+    # same time as the rear middles, overlapping by exactly one band. Equal
+    # 0.5/0.5 weights do NOT do this -- with 31 rows and 3 depths the row term
+    # swamps the depth term and the method degenerates into back-to-front.
+    w_depth = n_depth / (n_depth + 1.0)
+    w_row = 1.0 - w_depth
 
     def score(p: Passenger) -> float:
-        row_term = (len(ac.rowSlots) - 1 - p.rowSlot) / n_rows
+        # Both terms run 0..1 with HIGHER = board earlier, so the row term is
+        # distance from the FRONT: the rearmost row scores 1.
+        row_term = p.rowSlot / n_rows
         depth_term = (p.depth - 1) / n_depth
         return w_row * row_term + w_depth * depth_term
 
     ranked = _shuffled(rng, pax)
     ranked.sort(key=lambda p: -score(p))
 
-    # QUANTISE. This is the difference between the real scheme and a naive one.
-    # A continuous score over 31 rows and 3 depths is dominated by the row term,
-    # so sorting on it strictly degenerates into a row-by-row rear sweep -- which
-    # measures *worse* than random, not better. America West called six diagonal
-    # groups off a boarding pass, and it is the coarseness that makes it work:
-    # within a group people spread along the aisle instead of queueing at one row.
-    n_groups = max(2, cfg.zoneCount + 2)
+    # QUANTISE into (depth band x row zone) stripes. This is the difference
+    # between the real scheme and a naive one: sorting on a continuous score
+    # strictly degenerates into a per-passenger sequence, and the tiny residual
+    # ordering inside a stripe is worth nothing while costing all the aisle
+    # spreading that randomness inside a group buys you. On a 3-3 cabin with
+    # four zones this is the twelve diagonal stripes you would actually draw on
+    # a seat map.
+    n_groups = max(2, ac.maxDepth * cfg.zoneCount)
     total = len(ranked)
     out: List[Passenger] = []
     for g in range(n_groups):

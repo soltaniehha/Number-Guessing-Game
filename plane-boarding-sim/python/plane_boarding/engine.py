@@ -58,7 +58,8 @@ def _door_for_x(doors_sorted: Sequence[Door], bounds: Sequence[float], x: float)
 
 
 def assign_doors(
-    queue: Sequence[Passenger], doors: Sequence[Door], cfg: SimConfig, open_seating: bool
+    queue: Sequence[Passenger], ac: Aircraft, doors: Sequence[Door],
+    cfg: SimConfig, open_seating: bool
 ) -> None:
     """Stamp `doorId` on every passenger."""
     if len(doors) == 1 or cfg.doorAssignment == "single":
@@ -68,9 +69,23 @@ def assign_doors(
 
     if open_seating:
         # Nobody has a seat yet, so a seat-based split is meaningless. Ground
-        # staff simply feed the queue alternately into the two doors.
+        # staff feed the queue into both doors at once -- but the split must be
+        # proportional to how many seats each door's HALF OF THE CABIN holds,
+        # not a flat round robin. If a door outran its own region, its remaining
+        # passengers would have to walk past the other door to find a seat, and
+        # two streams walking head-on down a single-file aisle deadlock: neither
+        # can pass and neither will ever yield. Quota-ing by region capacity
+        # makes that geometrically impossible rather than merely unlikely.
+        caps = [len(v) for v in door_regions(ac, doors)]
+        left = list(caps)
         for p in queue:
-            p.doorId = doors[p.boardingIndex % len(doors)].id
+            best, best_key = 0, -1.0
+            for i, c in enumerate(caps):
+                key = (left[i] / c) if c else -1.0
+                if key > best_key:
+                    best, best_key = i, key
+            left[best] -= 1
+            p.doorId = doors[best].id
         return
 
     by_x = sorted(doors, key=lambda d: d.x)
@@ -96,6 +111,19 @@ def assign_doors(
             p.doorId = _door_for_x(cand, _split_boundaries(cand), p.seat.x).id
 
 
+def door_regions(ac: Aircraft, doors: Sequence[Door]) -> List[List[Seat]]:
+    """Partition every seat to the nearest door, splitting at the midpoints
+    between consecutive doors. Same rule as `split_by_row`, reused so the open
+    seating quota and the assigned-seat door split cannot disagree."""
+    by_x = sorted(doors, key=lambda d: d.x)
+    bounds = _split_boundaries(by_x)
+    order = {d.id: i for i, d in enumerate(doors)}
+    out: List[List[Seat]] = [[] for _ in doors]
+    for seat in ac.seats:
+        out[order[_door_for_x(by_x, bounds, seat.x).id]].append(seat)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Open seating (ENGINE_SPEC 6.5)
 # ---------------------------------------------------------------------------
@@ -114,9 +142,14 @@ class _OpenSeatPicker:
     than its reputation -- people spontaneously avoid climbing over strangers.
     """
 
-    def __init__(self, ac: Aircraft, policy: str):
+    def __init__(self, ac: Aircraft, policy: str, doors: Sequence[Door]):
         self.policy = policy
-        self.free: List[Seat] = list(ac.seats)
+        # One free list per door, covering only that door's half of the cabin.
+        # Confining the choice to your own region is what keeps two boarding
+        # streams from walking into each other in a single-file aisle.
+        self.free: Dict[str, List[Seat]] = {
+            d.id: seats for d, seats in zip(doors, door_regions(ac, doors))
+        }
         # Distance from each seat to the nearest already-SEATED passenger.
         # Maintained incrementally: recomputing it per choice would be O(S^2)
         # per passenger on a 197-seat aircraft.
@@ -128,29 +161,44 @@ class _OpenSeatPicker:
             return
         sx, sl = seat.x, seat.lateral
         nearest = self.nearest
-        for s in self.free:
-            dx = s.x - sx
-            dl = s.lateral - sl
-            d = math.sqrt(dx * dx + dl * dl)
-            if d < nearest[s.index]:
-                nearest[s.index] = d
+        for pool in self.free.values():
+            for s in pool:
+                dx = s.x - sx
+                dl = s.lateral - sl
+                d = math.sqrt(dx * dx + dl * dl)
+                if d < nearest[s.index]:
+                    nearest[s.index] = d
 
-    def take(self, door_x: float) -> Optional[Seat]:
-        if not self.free:
+    def give_back(self, door_id: str, seat: Seat) -> None:
+        """Un-commit a seat when the aisle turned out to be blocked. The pool is
+        kept in seat-index order so the retry next tick is bit-identical."""
+        pool = self.free[door_id]
+        lo, hi = 0, len(pool)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if pool[mid].index < seat.index:
+                lo = mid + 1
+            else:
+                hi = mid
+        pool.insert(lo, seat)
+
+    def take(self, door_id: str, door_x: float) -> Optional[Seat]:
+        pool = self.free[door_id]
+        if not pool:
             return None
         policy = self.policy
         if policy == "front_first":
-            best = min(self.free, key=lambda s: (abs(s.x - door_x), s.index))
+            best = min(pool, key=lambda s: (abs(s.x - door_x), s.index))
         elif policy == "avoid_neighbours":
             nearest = self.nearest
             best = min(
-                self.free,
+                pool,
                 key=lambda s: (-_finite(nearest[s.index]), abs(s.x - door_x), s.index),
             )
         else:
             rank = self.rank
-            best = min(self.free, key=lambda s: (rank[s.kind], s.x, s.index))
-        self.free.remove(best)
+            best = min(pool, key=lambda s: (rank[s.kind], s.x, s.index))
+        pool.remove(best)
         return best
 
 
@@ -208,7 +256,7 @@ def run(
 
     pax = generate(rng_pax, ac, cfg)
     queue = build_order(pax, ac, cfg, rng_order) if pax else []
-    assign_doors(queue, doors, cfg, open_seating)
+    assign_doors(queue, ac, doors, cfg, open_seating)
 
     n = len(queue)
     dt = cfg.dt
@@ -258,7 +306,7 @@ def run(
             plane[i] = s.aisleIndex
             ptarget[i] = s.x
 
-    picker = _OpenSeatPicker(ac, cfg.openSeatingPolicy) if open_seating else None
+    picker = _OpenSeatPicker(ac, cfg.openSeatingPolicy, doors) if open_seating else None
 
     # ---- lanes ------------------------------------------------------------
     n_lanes = ac.aisleCount
@@ -486,7 +534,7 @@ def run(
             pid = ds.queue[ds.cursor]
             door = ds.door
             if picker is not None:
-                seat = picker.take(door.x)
+                seat = picker.take(door.id, door.x)
                 if seat is None:
                     continue
                 pseat[pid] = seat
@@ -499,8 +547,7 @@ def run(
             lane = plane[pid]
             if not door_clear(lane, door.x):
                 if picker is not None:
-                    picker.free.append(pseat[pid])   # un-commit; retry next tick
-                    picker.free.sort(key=lambda s: s.index)
+                    picker.give_back(door.id, pseat[pid])   # retry next tick
                 continue
             px[pid] = door.x
             penter[pid] = t
@@ -552,18 +599,20 @@ def run(
                 else:
                     gap = 1e18
                     frac = 1.0
-                desired = pspeed[pid] * frac * dt
+                free = pspeed[pid] * dt          # what they could do unobstructed
+                desired = free * frac            # after the density slowdown
+                allowed = gap if gap < desired else desired
                 remaining = abs(ptarget[pid] - px[pid])
-                step = desired
-                if gap < step:
-                    step = gap
-                if remaining < step:
-                    step = remaining
+                step = allowed if allowed < remaining else remaining
                 if step > 0.0:
                     px[pid] += d * step
                     ptrav[pid] += step
-                if step < desired:
-                    pblocked[pid] += dt * (1.0 - step / desired)
+                # Lost time is measured against FREE FLOW, so it captures the
+                # density slowdown as well as a hard stop -- but the final
+                # partial step onto your own row is arrival, not obstruction,
+                # so `remaining` is deliberately excluded from this comparison.
+                if allowed < free:
+                    pblocked[pid] += dt * (1.0 - allowed / free)
                     if not pwasblocked[pid]:
                         pwasblocked[pid] = True
                         block_events += 1

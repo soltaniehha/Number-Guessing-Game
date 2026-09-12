@@ -1,0 +1,81 @@
+{
+  "_comment": "Cross-language parity fixtures. Every entry is run through BOTH engines by parity/compare.py and the canonical digests (ENGINE_SPEC 9) are compared field by field. The set is chosen for COVERAGE, not realism: every aircraft, both aisle counts, one and two doors, all three door-assignment policies, open seating with each of its four seat-choice policies, the load-factor extremes, and the degenerate bag mixes -- because a draw-order bug usually shows up in exactly one of those corners. Fixture configs must use plain JSON-round-trippable values: the config_hash is a hash of the canonically re-serialised object, so an exponent or a 17-digit float would not survive the trip into JavaScript.",
+
+  "fixtures": [
+    {
+      "name": "a320neo_random_2door",
+      "_why": "The house default and the calibration scenario: easyJet 186-seat single-class, both doors, random boarding.",
+      "config": { "aircraftId": "a320neo", "strategy": "random", "seed": 1, "loadFactor": 0.92 }
+    },
+    {
+      "name": "a320neo_wilma_1door",
+      "_why": "Outside-in through a single door. Exercises the depth ordering and the zero-interference path.",
+      "config": { "aircraftId": "a320neo", "strategy": "wilma", "seed": 2, "loadFactor": 0.92, "doors": ["1L"] }
+    },
+    {
+      "name": "schultz_reference",
+      "_why": "walkSpeedSd = 0 reduces the model exactly to Schultz's deterministic 0.8 m/s configuration, so this fixture is the apples-to-apples comparison against his published figures. Also the best structural regression canary in the set: it has no speed noise to hide a change behind.",
+      "config": { "aircraftId": "a320neo", "strategy": "random", "seed": 4242, "loadFactor": 0.9677419354838709, "doors": ["1L"], "walkSpeedSd": 0 }
+    },
+    {
+      "name": "e175_starved_bins",
+      "_why": "One bag slot per row-side against a regional bag mix: the gate-check and outward-bin-search paths, which nothing else in the set drives hard.",
+      "config": { "aircraftId": "e175", "strategy": "back_to_front", "seed": 3, "loadFactor": 1.0 }
+    },
+    {
+      "name": "b737_max8_lcc_two_door",
+      "_why": "197 seats, front and rear airstairs, deleted seats at rows 1/27/28 and a skipped row 13. The irregular-geometry fixture.",
+      "config": { "aircraftId": "b737_max8", "strategy": "steffen_modified", "seed": 5, "loadFactor": 0.95 }
+    },
+    {
+      "name": "a220_asymmetric_pyramid",
+      "_why": "2-3 asymmetric cabin: the port side can never produce a 9-movement shuffle, so this fixture pins the movement-count table on both sides at once.",
+      "config": { "aircraftId": "a220_300", "strategy": "reverse_pyramid", "seed": 6, "loadFactor": 0.88 }
+    },
+    {
+      "name": "b777_twin_aisle_split_by_aisle",
+      "_why": "Twin aisle, two doors, split_by_aisle. The only fixture where two lanes run in parallel with different door feeds.",
+      "config": { "aircraftId": "b777_300er", "strategy": "common_sense_5tier", "seed": 7, "loadFactor": 0.9, "doorAssignment": "split_by_aisle" }
+    },
+    {
+      "name": "b777_steffen_single_door",
+      "_why": "Steffen on a four-block twin-aisle cabin: 8 x maxDepth waves rather than the narrowbody's 4. Forces the generalised block indexing.",
+      "config": { "aircraftId": "b777_300er", "strategy": "steffen_perfect", "seed": 8, "loadFactor": 0.85, "doors": ["1L"], "doorAssignment": "single" }
+    },
+    {
+      "name": "b787_9_one_door_monuments",
+      "_why": "Boards 2L only, with business forward of the door and economy aft, so the same lane carries traffic in both directions past three real galley monuments.",
+      "config": { "aircraftId": "b787_9", "strategy": "priority_5tier", "seed": 9, "loadFactor": 0.93 }
+    },
+    {
+      "name": "open_seating_avoid_neighbours",
+      "_why": "Seat choice made at the door line against the live seated set, plus the incremental nearest-neighbour distance cache.",
+      "config": { "aircraftId": "e175", "strategy": "open_seating", "seed": 10, "loadFactor": 0.86, "openSeatingPolicy": "avoid_neighbours" }
+    },
+    {
+      "name": "open_seating_window_first_two_door",
+      "_why": "Open seating with more than one door, which falls back to round-robin door assignment because nobody has a seat to split on.",
+      "config": { "aircraftId": "b737_max8", "strategy": "open_seating", "seed": 11, "loadFactor": 0.8, "openSeatingPolicy": "window_first" }
+    },
+    {
+      "name": "empty_cabin",
+      "_why": "loadFactor 0. Zero passengers must produce a well-formed zero-length result rather than a divide-by-zero.",
+      "config": { "aircraftId": "a220_300", "strategy": "random", "seed": 12, "loadFactor": 0.0 }
+    },
+    {
+      "name": "full_cabin_two_bags_everyone",
+      "_why": "100% load, everyone carrying two pieces, no zero-bag passengers. Saturates the bins and maximises the number of Weibull draws per passenger.",
+      "config": { "aircraftId": "a320neo", "strategy": "front_to_back", "seed": 13, "loadFactor": 1.0, "bagWeights": { "0": 0, "1": 0, "2": 1 } }
+    },
+    {
+      "name": "no_bags_no_frictions",
+      "_why": "The degenerate end: nobody has luggage, nobody is in a party, everybody complies. Isolates the aisle exclusion model from every service-time draw.",
+      "config": { "aircraftId": "a320neo", "strategy": "steffen_perfect", "seed": 14, "loadFactor": 1.0, "doors": ["1L"], "bagWeights": { "0": 1, "1": 0, "2": 0 }, "partySizeWeights": { "1": 1 }, "nonComplianceRate": 0, "lateRate": 0, "preboardRate": 0, "slowPaxRate": 0 }
+    },
+    {
+      "name": "single_passenger",
+      "_why": "One passenger on a 354-seat aircraft: no queue, no blocker lookups, every counter at its floor.",
+      "config": { "aircraftId": "b777_300er", "strategy": "slowest_first", "seed": 15, "loadFactor": 0.0028248587570621 }
+    }
+  ]
+}

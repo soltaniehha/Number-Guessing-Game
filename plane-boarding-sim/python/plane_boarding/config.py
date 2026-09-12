@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 _HERE = Path(__file__).resolve()
 PARITY_DIR = _HERE.parents[2] / "parity"

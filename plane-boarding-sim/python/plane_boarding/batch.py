@@ -11,10 +11,10 @@ It is why the CLI's default run counts look small.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from .aircraft import get_aircraft
-from .config import SimConfig, build_config
+from .config import SimConfig
 from .engine import simulate
 from .metrics import Aggregate, RunResult
 from .strategies import STRATEGIES
