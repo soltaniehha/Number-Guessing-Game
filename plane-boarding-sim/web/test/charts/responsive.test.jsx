@@ -16,6 +16,7 @@ import { Convergence } from '../../src/charts/Convergence.jsx'
 import { RiskReward } from '../../src/charts/RiskReward.jsx'
 import { AisleThroughput } from '../../src/charts/AisleThroughput.jsx'
 import { makeBatch } from '../../src/charts/__fixtures__/makeBatch.js'
+import { installCanvasStub } from './stubCanvas.js'
 
 const CHARTS = [
   ['BoardingTimeByStrategy', BoardingTimeByStrategy],
@@ -69,6 +70,7 @@ function geometry(container) {
 beforeAll(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   globalThis.ResizeObserver = StubResizeObserver
+  installCanvasStub()
 })
 
 afterEach(() => {

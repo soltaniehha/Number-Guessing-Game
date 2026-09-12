@@ -28,7 +28,7 @@
  */
 import ROSTER from '../../../parity/aircraft.json' with { type: 'json' }
 import { ConfigError, INCH } from './config.js'
-import { sortByKey } from './pyutil.js'
+import { pyRound, sortByKey } from './pyutil.js'
 
 export const AISLE = '|'
 
@@ -472,9 +472,19 @@ function resolveSpec(spec) {
   })
 }
 
-/** Round to 6 dp the way `geometry_payload` does. */
-const r6 = (v) => Math.round(v * 1e6) / 1e6
-const r4 = (v) => Math.round(v * 1e4) / 1e4
+/**
+ * Round to 6 dp the way `geometry_payload` does -- which means Python's
+ * `round(x, 6)`, i.e. half-to-EVEN decided on the exact binary value.
+ *
+ * `Math.round(v * 1e6) / 1e6` is not that: it is half-UP on a rounded product,
+ * so `0.0000005` gives `1e-6` here and `0.0` in Python. Every value in the
+ * current roster happens to agree, which is precisely what made this a latent
+ * hazard rather than a visible bug -- a new airframe whose pitch landed on a tie
+ * would have broken replay parity silently. `pyRound` exists for exactly this
+ * and every other file in the port already uses it.
+ */
+const r6 = (v) => pyRound(v, 6)
+const r4 = (v) => pyRound(v, 4)
 
 /**
  * The resolved geometry, JSON-ready, for the replay format and the renderer.

@@ -270,8 +270,19 @@ def run(
     ac: Optional[Aircraft] = None,
     record_replay: bool = False,
     frame_interval: float = 0.25,
+    tick_hook: Optional[Any] = None,
 ) -> Tuple[RunResult, Optional[Dict[str, Any]]]:
-    """Simulate one boarding. Returns `(RunResult, replay_or_None)`."""
+    """Simulate one boarding. Returns `(RunResult, replay_or_None)`.
+
+    `tick_hook`, if given, is called at the end of every tick as
+    `hook(tick, t, pstate, px, plane, pdir, passing, pass_holder)`. It exists so the
+    test suite can assert invariants that involve the squeeze LOCK, which is
+    interior state the replay format deliberately does not carry -- notably
+    "a walker inside a stower's body-depth zone holds that stower's lock",
+    the assertion that would have caught the squeeze-past deadlock. It is not
+    part of the simulation: nothing it is handed may be mutated, and the
+    default of `None` costs one comparison per tick.
+    """
     if ac is None:
         ac = get_aircraft(cfg.aircraftId)
     if cfg.strategy not in STRATEGIES:
@@ -437,7 +448,7 @@ def run(
 
     seated_curve: List[Tuple[float, int]] = []
     aisle_curve: List[Tuple[float, int]] = []
-    congestion: List[List[float]] = [[] for _ in range(n_rows)]
+    congestion: List[List[int]] = [[] for _ in range(n_rows)]
 
     frames_state: List[List[int]] = []
     frames_x: List[List[float]] = []
@@ -756,10 +767,26 @@ def run(
                             squeeze = True
                     if squeeze:
                         cap = pass_factor
-                        # Still must not run into whoever is beyond the stower(s).
+                        # Still must not run into whoever is beyond the stower.
+                        #
+                        # The bound is the VERY NEXT body, whatever it is doing.
+                        # This loop used to skip over intervening stowers, on the
+                        # theory that a squeeze can carry you past more than one
+                        # of them -- but a squeeze lock covers exactly one stower,
+                        # the one at `nb`, so skipping let a passer come to rest
+                        # inside a SECOND stower's exclusion zone without holding
+                        # its lock. When that stow then finished, `stow_done`
+                        # closed the squeeze to new entrants, so the passer could
+                        # never acquire the lock, its gap clamped to 0, and
+                        # `stower_clear` saw a body within BODY_DEPTH forever.
+                        # Circular wait -- reachable from the shipped UI at
+                        # dt >= 0.4 with stowPassSpeedFactor >= 0.8.
+                        #
+                        # Bounded this way the passer can only ever be inside the
+                        # zone of the stower it owns, which is the invariant
+                        # `test_a_passer_inside_a_stowers_zone_owns_the_lock`
+                        # asserts.
                         k = j + d
-                        while 0 <= k < n_occ and pstate[occ[k]] == STOWING:
-                            k += d
                         if 0 <= k < n_occ:
                             gap = abs(px[occ[k]] - px[pid]) - body
                             if gap < 0.0:
@@ -827,12 +854,19 @@ def run(
             seated_curve.append((round(t, 6), seated_count))
             aisle_curve.append((round(t, 6), occupied))
             for r in range(n_rows):
-                congestion[r].append(float(counts[r]))
+                # Held as an int, not a float. It IS a body count, and
+                # `float()` here made Python serialise `0.0` where JS serialises
+                # `0`, so the replay JSON was not byte-comparable between the two
+                # engines even though the values agreed. See ENGINE_SPEC 7.
+                congestion[r].append(counts[r])
 
         if record_replay and t + 1e-9 >= next_frame_t:
             frames_state.append(list(pstate))
             frames_x.append([round(v, 4) for v in px])
             next_frame_t += frame_interval
+
+        if tick_hook is not None:
+            tick_hook(tick, t, pstate, px, plane, pdir, passing, pass_holder)
 
         tick += 1
 

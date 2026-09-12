@@ -420,6 +420,61 @@ def test_late_arrivals_go_to_the_very_back():
         "with front-to-back, only late arrivals can be rear-seated at the back")
 
 
+def _late_block(seed=7, **ov):
+    """Recover the set of passenger ids that step 4 moved to the back.
+
+    `build_order` emits `ontime + late`, both subsequences of the order the same
+    scenario produces with `lateRate = 0`, so ranking the late-enabled queue
+    against the late-free one gives two increasing runs and the split between
+    them is where the late block starts.
+    """
+    _, s = make_queue(cfg_for("a320neo", "random", seed=seed, lateRate=0.0, **ov))
+    _, a = make_queue(cfg_for("a320neo", "random", seed=seed, lateRate=0.30, **ov))
+    rank = {p.id: i for i, p in enumerate(s)}
+    seq = [rank[p.id] for p in a]
+    rising = lambda xs: all(xs[i] < xs[i + 1] for i in range(len(xs) - 1))
+    for m in range(len(seq) + 1):
+        if rising(seq[:m]) and rising(seq[m:]):
+            return {p.id for p in a[m:]}
+    raise AssertionError("queue is not a merge of two ordered runs")
+
+
+def test_who_arrives_late_does_not_depend_on_the_compliance_jitter():
+    """ENGINE_SPEC 1.3: the behaviour stream is Bernoulli(nonComplianceRate),
+    then -- only if that came up -- randint(2*jitter+1), then Bernoulli(lateRate).
+    Both conditions are on the Bernoulli, so the number of draws a passenger
+    consumes before their late draw must not depend on the jitter WIDTH.
+
+    It used to. The whole step was gated on `jitter > 0`, so at jitter 0 the
+    compliance Bernoulli was skipped and the late draw was the first draw
+    instead of the second -- which made `complianceJitter`, a slider about
+    queue discipline, silently re-roll which passengers turn up late. Both
+    engines did the same wrong thing, so parity never noticed.
+    """
+    base = _late_block(nonComplianceRate=0.15, complianceJitter=0)
+    assert base, "nobody was late -- the test proves nothing"
+    for jitter in (1, 2, 6, 12):
+        assert _late_block(nonComplianceRate=0.15, complianceJitter=jitter) == base, (
+            f"complianceJitter={jitter} changed who arrives late")
+
+
+def test_the_compliance_bernoulli_is_consumed_even_at_zero_jitter():
+    """The direct statement of the same fix, from the other side: at jitter 0 the
+    compliance draw cannot move anybody, but it must still be TAKEN, so the late
+    set differs from the one you get with the rate itself at zero."""
+    def order(**ov):
+        _, q = make_queue(cfg_for("a320neo", "random", seed=7, complianceJitter=0, **ov))
+        return [p.id for p in q]
+
+    # With no lateness in play, jitter 0 leaves the order untouched either way --
+    # so any difference below is entirely about who is late, not about ordering.
+    assert order(nonComplianceRate=0.0, lateRate=0.0) == \
+        order(nonComplianceRate=0.15, lateRate=0.0)
+    assert order(nonComplianceRate=0.0, lateRate=0.30) != \
+        order(nonComplianceRate=0.15, lateRate=0.30), (
+        "the compliance Bernoulli was not consumed, so the late draw shifted")
+
+
 def test_unknown_strategy_is_rejected_clearly():
     from plane_boarding.config import ConfigError
     with pytest.raises((KeyError, ConfigError)):

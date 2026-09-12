@@ -14,8 +14,10 @@ import { createRoot } from 'react-dom/client'
 
 import { ChartGrid, useMilestoneStatus } from '../../src/charts/ChartGrid.jsx'
 import { makeBatch } from '../../src/charts/__fixtures__/makeBatch.js'
+import { installCanvasStub } from './stubCanvas.js'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
+installCanvasStub()
 
 const mounted = []
 

@@ -228,6 +228,116 @@ it('always resolves a squeeze rather than deadlocking', () => {
   }
 })
 
+/**
+ * Audit the squeeze LOCK, which the replay format deliberately does not carry,
+ * via `run(..., tickHook)`. Mirrors `squeeze_lock_audit` in
+ * `python/tests/test_physics.py`.
+ *
+ * Splits every (STOWING i, WALKING/SHUFFLING j) pair inside `i`'s body-depth
+ * zone where `j` does NOT hold `i`'s squeeze lock, by which side of `i` the
+ * walker is on in its own direction of travel:
+ *
+ * - `exiting`     — `j` has already crossed `i`. Legal and expected: the lock
+ *   hands over to the next stower as soon as the passer's obstruction changes
+ *   rather than when it is fully clear, which is deliberate and is what stops a
+ *   passer being stuck holding a lock it cannot release.
+ * - `approaching` — `j` has NOT crossed `i` and sits inside its zone unowned.
+ *   Must be zero. This is the deadlock: `stowDone[i]` shuts the squeeze to new
+ *   entrants once `i`'s stow finishes, so `j` can never take the lock, its gap
+ *   clamps to 0, and `stowerClear(i)` never comes true. Circular wait.
+ */
+function squeezeLockAudit(overrides = {}, seed = 3) {
+  const cfg = cfgFor('a320neo', 'random', seed, overrides)
+  const ac = getAircraft(cfg.aircraftId)
+  let approaching = 0
+  let exiting = 0
+  let detail = ''
+  const hook = (tick, t, pstate, px, plane, pdir, passing, passHolder) => {
+    // One pass to collect the two short lists, rather than n^2 over the whole
+    // manifest every tick.
+    const stowers = []
+    const movers = []
+    for (let i = 0; i < pstate.length; i++) {
+      if (pstate[i] === STOWING) stowers.push(i)
+      else if (pstate[i] === WALKING || pstate[i] === SHUFFLING) movers.push(i)
+    }
+    if (!stowers.length) return
+    for (const i of stowers) {
+      const xi = px[i]
+      const li = plane[i]
+      const holder = passHolder[i]
+      for (const j of movers) {
+        if (plane[j] !== li || holder === j) continue
+        const sep = Math.abs(px[j] - xi)
+        if (sep >= BODY_DEPTH - 1e-9) continue
+        if (pdir[j] * (px[j] - xi) > 0.0) exiting += 1
+        else {
+          approaching += 1
+          if (!detail) {
+            detail =
+              `tick ${tick} (t=${t.toFixed(2)}s): passenger ${j} is ${sep.toFixed(3)} m ` +
+              `behind stower ${i} (BODY_DEPTH=${BODY_DEPTH}) without holding its ` +
+              `squeeze lock (held by ${holder})`
+          }
+        }
+      }
+    }
+  }
+  const { result } = run(cfg, ac, false, 0.25, hook)
+  return { result, approaching, exiting, detail }
+}
+
+// The corners that used to wedge. `dt` (max 0.5) and `stowPassSpeedFactor`
+// (max 1.0) are both plain sliders in the shipped UI, so every one of these is
+// reachable by a user dragging two controls.
+const SQUEEZE_GRID = [
+  [0.1, 0.4],
+  [0.3, 0.6],
+  [0.4, 0.8],
+  [0.4, 1.0],
+  [0.5, 0.8],
+  [0.5, 1.0],
+]
+
+describe.each([1, 3])('seed %i', (seed) => {
+  it.each(SQUEEZE_GRID)(
+    'keeps a walker inside a stower’s zone holding that stower’s lock (dt %f, factor %f)',
+    (dt, factor) => {
+      // THE assertion that would have caught the squeeze-past deadlock. The step
+      // of a squeezing passenger is bounded by the very next body beyond the
+      // stower it owns; it used to be bounded by the first NON-STOWING body,
+      // skipping intervening stowers, so a passer could come to rest inside a
+      // second stower's exclusion zone holding no lock on it and the pair could
+      // never separate.
+      //
+      // The ownership assertion comes FIRST because it is strictly stronger than
+      // "the run finished": before the fix, dt 0.5 / factor 0.8 / seed 3
+      // completed normally and still put a walker inside an unowned stower's
+      // zone once.
+      const { result, approaching, detail } = squeezeLockAudit(
+        { dt, stowPassSpeedFactor: factor },
+        seed,
+      )
+      expect(
+        approaching,
+        `dt=${dt} factor=${factor} seed=${seed}: walker inside an unowned stower’s ` +
+          `zone on the APPROACH side -- ${detail}`,
+      ).toBe(0)
+      expect(result.completed, `dt=${dt} factor=${factor} seed=${seed}`).toBe(true)
+    },
+  )
+})
+
+it('sees real squeezes, so the lock audit is not vacuous', () => {
+  // Anti-vacuity guard: at the shipped default the audit must observe the
+  // handover transient it exists to permit. If this hits zero, the ownership
+  // assertion has stopped proving anything.
+  const { result, approaching, exiting } = squeezeLockAudit({ loadFactor: 0.9 })
+  expect(result.completed).toBe(true)
+  expect(approaching).toBe(0)
+  expect(exiting).toBeGreaterThan(0)
+})
+
 it('never lets anybody move faster than their own walk speed', () => {
   const { replay, speed } = trace('a320neo', 'random')
   const { state: states, x: xs } = replay.frames

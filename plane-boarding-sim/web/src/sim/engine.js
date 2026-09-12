@@ -304,9 +304,17 @@ class DoorState {
  * @param {object} [ac] resolved aircraft; looked up from `cfg` when omitted
  * @param {boolean} [recordReplay]
  * @param {number} [frameInterval]
+ * @param {?function} [tickHook] called at the end of every tick as
+ *   `hook(tick, t, pstate, px, plane, pdir, passing, passHolder)`. It exists so the
+ *   test suite can assert invariants that involve the squeeze LOCK, which is
+ *   interior state the replay format deliberately does not carry -- notably
+ *   "a walker inside a stower's body-depth zone holds that stower's lock", the
+ *   assertion that would have caught the squeeze-past deadlock. It is not part
+ *   of the simulation: nothing it is handed may be mutated, and the default of
+ *   `null` costs one comparison per tick.
  * @returns {{result: object, replay: object|null}}
  */
-export function run(cfg, ac = null, recordReplay = false, frameInterval = 0.25) {
+export function run(cfg, ac = null, recordReplay = false, frameInterval = 0.25, tickHook = null) {
   if (ac === null) ac = getAircraft(cfg.aircraftId)
   if (!Object.prototype.hasOwnProperty.call(STRATEGIES, cfg.strategy)) {
     throw new ConfigError(
@@ -864,9 +872,23 @@ export function run(cfg, ac = null, recordReplay = false, frameInterval = 0.25) 
           }
           if (squeeze) {
             cap = passFactor
-            // Still must not run into whoever is beyond the stower(s).
-            let k = j + d
-            while (k >= 0 && k < nOcc && pstate[occ[k]] === STOWING) k += d
+            // Still must not run into whoever is beyond the stower.
+            //
+            // The bound is the VERY NEXT body, whatever it is doing. This used
+            // to skip over intervening stowers, on the theory that a squeeze can
+            // carry you past more than one of them -- but a squeeze lock covers
+            // exactly one stower, the one at `nb`, so skipping let a passer come
+            // to rest inside a SECOND stower's exclusion zone without holding its
+            // lock. When that stow then finished, `stowDone` closed the squeeze
+            // to new entrants, so the passer could never acquire the lock, its
+            // gap clamped to 0, and `stowerClear` saw a body within BODY_DEPTH
+            // forever. Circular wait -- reachable from the shipped UI at
+            // dt >= 0.4 with stowPassSpeedFactor >= 0.8.
+            //
+            // Bounded this way the passer can only ever be inside the zone of the
+            // stower it owns, which is the invariant asserted by
+            // 'a walker inside a stower’s body-depth zone holds that stower’s lock'.
+            const k = j + d
             if (k >= 0 && k < nOcc) {
               gap = Math.abs(px[occ[k]] - px[pid]) - body
               if (gap < 0.0) gap = 0.0
@@ -942,6 +964,11 @@ export function run(cfg, ac = null, recordReplay = false, frameInterval = 0.25) 
       }
       seatedCurve.push({ t: pyRound(t, 6), seated: seatedCount })
       aisleCurve.push({ t: pyRound(t, 6), count: occupied })
+      // Integers, matching Python. It IS a body count; Python used to store it
+      // as a float, so it serialised `0.0` where this serialises `0` and the
+      // replay JSON was not byte-comparable even though the values agreed.
+      // `counts` is an Int32Array, so these are already integers. See
+      // ENGINE_SPEC 7.
       for (let r = 0; r < nRows; r++) congestion[r].push(counts[r])
     }
 
@@ -952,6 +979,8 @@ export function run(cfg, ac = null, recordReplay = false, frameInterval = 0.25) 
       framesX.push(row)
       nextFrameT += frameInterval
     }
+
+    if (tickHook !== null) tickHook(tick, t, pstate, px, plane, pdir, passing, passHolder)
 
     tick += 1
   }

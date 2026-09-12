@@ -237,3 +237,30 @@ describe('config layering', () => {
     expect(cfg.eliteWeights).toEqual([1, 2, 3])
   })
 })
+
+// The second axis of the deadlock sweep. `dt` and `stowPassSpeedFactor` are both
+// plain sliders in the shipped UI (max 0.5 and 1.0), and their product governs
+// how far a squeezing passenger travels in one step -- exactly the quantity the
+// squeeze-past wedge was a function of. Every pair below reproduced that wedge
+// before the fix; dt 0.5 x factor 1.0 failed on 3 of 5 seeds.
+const SQUEEZE_STEP_GRID = []
+for (const dt of [0.3, 0.4, 0.5]) for (const f of [0.6, 0.8, 1.0]) SQUEEZE_STEP_GRID.push([dt, f])
+
+describe.each(ALL_AIRCRAFT)('%s', (aid) => {
+  it('completes every strategy at every time step and squeeze factor', () => {
+    // Sweeping strategies against doors alone could not have caught the
+    // squeeze-past deadlock: the default `dt` of 0.1 never advances a passer far
+    // enough in one step to land inside a second stower's zone. The combination
+    // is reachable from the shipped UI by dragging two sliders.
+    for (const strategy of ALL) {
+      for (const [dt, factor] of SQUEEZE_STEP_GRID) {
+        const r = simulate(cfgFor(aid, strategy, 2, { dt, stowPassSpeedFactor: factor }))
+        expect(
+          r.completed,
+          `${aid}/${strategy}/dt=${dt}/factor=${factor} hit MAX_SIM_SECONDS`,
+        ).toBe(true)
+        expect(r.totalSeconds).toBeLessThan(3600)
+      }
+    }
+  })
+})

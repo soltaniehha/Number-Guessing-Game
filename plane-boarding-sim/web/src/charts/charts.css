@@ -57,7 +57,14 @@
 
 .ch-body { position: relative; min-width: 0; }
 
-.ch-svg { display: block; overflow: visible; }
+/* The SVG is positioned so it stacks ABOVE the canvas cell layer below it:
+   axes, frame and hit layer stay in the DOM, the cells are pixels. */
+.ch-svg { display: block; overflow: visible; position: relative; z-index: 1; }
+
+/* Matrix cells painted by `HeatCanvas`, aligned to the plot area in the same
+   CSS pixel space the tooltip uses. Decorative and inert — the numbers live in
+   the SVG's aria description and the table view. */
+.ch-heat-canvas { position: absolute; z-index: 0; pointer-events: none; }
 
 .ch-foot {
   margin: 0;

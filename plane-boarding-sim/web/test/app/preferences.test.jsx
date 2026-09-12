@@ -29,10 +29,21 @@ function stubMatchMedia(on) {
   }))
 }
 
+/**
+ * Every root mounted by a test, so `afterEach` can take them down again.
+ *
+ * These tests mount the whole App, which starts a playback clock and a
+ * deferred run. Leaving a root mounted lets one of those fire after vitest has
+ * torn the environment down, which fails the RUN while every test passes --
+ * an intermittent, maddening way for `make test` to go red.
+ */
+const mounted = []
+
 async function mount() {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
+  mounted.push(root)
   await act(async () => {
     root.render(<App />)
   })
@@ -51,7 +62,13 @@ beforeEach(() => {
   document.documentElement.removeAttribute('data-theme')
 })
 
-afterEach(() => {
+afterEach(async () => {
+  while (mounted.length) {
+    const root = mounted.pop()
+    await act(async () => {
+      root.unmount()
+    })
+  }
   window.matchMedia = realMatchMedia
 })
 

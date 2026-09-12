@@ -176,3 +176,69 @@ export const byMeanAsc = (list) =>
   [...list].sort(
     (a, b) => (a.entry?.totalSeconds?.mean ?? Infinity) - (b.entry?.totalSeconds?.mean ?? Infinity),
   )
+
+/* ---------- congestion matrix: units and row identity -------------------- */
+
+/**
+ * Fallback column spacing, seconds.
+ *
+ * The engine's own default (`parity/defaults.json`, `sampleInterval: 2.0`).
+ * Used only when a batch predates `meta.sampleInterval`; a batch that carries
+ * the field always wins, because the user can change the interval.
+ */
+export const DEFAULT_SAMPLE_INTERVAL = 2
+
+/**
+ * Seconds per column of `congestionMean`.
+ *
+ * ENGINE_SPEC §7: `congestion` is *sampled* at `sampleInterval`, so column `b`
+ * is the sample taken at `b * sampleInterval` seconds — a fixed grid that has
+ * nothing to do with how long the run lasted. Deriving it as
+ * `totalSeconds.mean / columns` (which this layer used to do) is wrong by
+ * exactly the amount the matrix was truncated by, and stretches the whole time
+ * axis: on a320neo/random/0.92 that was 2.234 s per column instead of 2.0, an
+ * 11.7% error in every time read-out.
+ */
+export function sampleIntervalOf(batch) {
+  const v = Number(batch?.meta?.sampleInterval)
+  return Number.isFinite(v) && v > 0 ? v : DEFAULT_SAMPLE_INTERVAL
+}
+
+/**
+ * Printed row numbers for the congestion matrix's rows.
+ *
+ * The matrix is indexed by **row slot** (ENGINE_SPEC §2.1): a contiguous
+ * fore→aft index that is NOT the printed row number. `slot + 1` only coincides
+ * with the row number on an aircraft that starts at row 1 and skips nothing —
+ * on `b737_max8` (no row 13) everything aft of row 12 is off by one, and on
+ * `b787_9` (rows 1-12, 20-22, 30-35, 42-57) slot 21 is row 42, not row 22.
+ *
+ * Accepts either `meta.rowSlots` (`[{slot, number}]`, the geometry export's own
+ * shape) or a parallel `meta.rowNumbers` array of numbers.
+ *
+ * @returns {{numbers: (number|null)[], exact: boolean}} `exact` is false when
+ *   the batch did not ship the mapping, in which case callers must label by
+ *   slot rather than invent a row number.
+ */
+export function rowNumbersOf(batch, rowCount) {
+  const n = Number.isFinite(rowCount) && rowCount > 0 ? Math.trunc(rowCount) : 0
+  const numbers = new Array(n).fill(null)
+  const meta = batch?.meta
+  const source = Array.isArray(meta?.rowSlots)
+    ? meta.rowSlots
+    : Array.isArray(meta?.rowNumbers)
+      ? meta.rowNumbers
+      : null
+  if (!source) return { numbers, exact: false }
+
+  for (let i = 0; i < source.length; i += 1) {
+    const item = source[i]
+    const slot = Number.isFinite(item?.slot) ? item.slot : i
+    if (slot < 0 || slot >= n) continue
+    const value = Number(
+      typeof item === 'number' || typeof item === 'string' ? item : item?.number ?? item?.rowNumber,
+    )
+    if (Number.isFinite(value)) numbers[slot] = value
+  }
+  return { numbers, exact: n > 0 && numbers.every((v) => v != null) }
+}

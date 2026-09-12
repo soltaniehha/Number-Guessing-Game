@@ -197,3 +197,34 @@ def test_no_strategy_door_combination_hits_the_time_limit(aid):
             assert r.completed, f"{aid}/{strategy}/{doors} hit MAX_SIM_SECONDS"
             assert r.totalSeconds < 3600, (
                 f"{aid}/{strategy}/{doors} took {r.totalSeconds:.0f}s")
+
+
+#: The second axis of the deadlock sweep. `dt` and `stowPassSpeedFactor` are
+#: both plain sliders in the shipped UI (max 0.5 and 1.0), and their product is
+#: what governs how far a squeezing passenger travels in one step -- which is
+#: exactly the quantity the squeeze-past wedge was a function of. Every pair
+#: below was verified to reproduce that wedge before the fix; dt 0.5 x factor
+#: 1.0 failed on 3 of 5 seeds and dt 0.4 x factor 1.0 on 1 of 5.
+SQUEEZE_STEP_GRID = [(dt, f) for dt in (0.3, 0.4, 0.5) for f in (0.6, 0.8, 1.0)]
+
+
+@pytest.mark.parametrize("aid", ["e175", "a320neo", "b737_max8", "a220_300",
+                                 "b777_300er", "b787_9"])
+def test_no_strategy_time_step_squeeze_combination_hits_the_time_limit(aid):
+    """The deadlock sweep, second axis: strategy x dt x stowPassSpeedFactor.
+
+    Sweeping strategies against doors alone could not have caught the
+    squeeze-past deadlock, because the default `dt` of 0.1 never advances a
+    passer far enough in one step to land inside a second stower's zone. The
+    combination is reachable from the shipped UI by dragging two sliders, so it
+    is swept here rather than left to a user to discover.
+    """
+    from plane_boarding.strategies import STRATEGIES
+    for strategy in STRATEGIES:
+        for dt, factor in SQUEEZE_STEP_GRID:
+            r = simulate(cfg_for(aid, strategy, seed=2, dt=dt,
+                                 stowPassSpeedFactor=factor))
+            assert r.completed, (
+                f"{aid}/{strategy}/dt={dt}/factor={factor} hit MAX_SIM_SECONDS")
+            assert r.totalSeconds < 3600, (
+                f"{aid}/{strategy}/dt={dt}/factor={factor} took {r.totalSeconds:.0f}s")

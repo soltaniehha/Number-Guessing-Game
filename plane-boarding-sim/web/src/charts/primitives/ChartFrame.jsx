@@ -27,6 +27,13 @@ export function ChartFrame({
   emptyHint = 'Start a Monte Carlo run — this chart fills in as replications stream back.',
   table = null,
   tooltip = null,
+  /**
+   * Optional layer painted *under* the SVG, in the body's own pixel space —
+   * for a chart whose marks are too many to be DOM nodes (see `HeatCanvas`).
+   * Called with the same geometry the children get, and only while the chart
+   * is actually showing (not empty, not flipped to the table view).
+   */
+  overlay = null,
   onPointerLeave,
   children,
 }) {
@@ -72,6 +79,8 @@ export function ChartFrame({
           <DataTable columns={table.columns} rows={table.rows} caption={table.caption ?? ariaLabel} />
         ) : (
           <>
+            {typeof overlay === 'function' &&
+              overlay({ width, height: svgHeight, innerWidth, innerHeight, margin, compact })}
             <svg
               className="ch-svg"
               width="100%"

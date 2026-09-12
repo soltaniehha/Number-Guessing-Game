@@ -25,7 +25,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { getAircraft } from '../web/src/sim/aircraft.js'
+import { geometryPayload, getAircraft } from '../web/src/sim/aircraft.js'
 import { buildConfig } from '../web/src/sim/config.js'
 import { simulate } from '../web/src/sim/engine.js'
 import { pyRound } from '../web/src/sim/pyutil.js'
@@ -231,6 +231,48 @@ export function r9(value) {
  * themselves rather than from the engine's sampled curve -- the sampling
  * interval is a config knob and must not leak into the parity contract.
  */
+/**
+ * A 6-dp float as fixed-point text, with -0 normalised to 0.
+ *
+ * Fixed-point rather than the language's own number repr, because Python prints
+ * an integral float as `1.0` and JavaScript prints it as `1`. Every value fed to
+ * this has already been through `round(x, 6)`, so it sits within an ulp of a
+ * 6-dp decimal and both `%.6f` and `Number.toFixed(6)` recover that decimal
+ * exactly -- there is no tie for their differing tie rules to disagree about.
+ */
+export function f6(value) {
+  return (value + 0).toFixed(6)
+}
+
+const i = (value) => String(Math.trunc(value))
+
+/**
+ * Hash every ROUNDED value in `geometryPayload`, plus the identifiers that give
+ * them meaning. Mirrors `geometry_fingerprint` in `emit_py.py`.
+ *
+ * The digest covers the simulation but used to stop at the cabin door: nothing
+ * in it depended on the geometry payload, so a rounding disagreement between
+ * `round(x, 6)` and a hand-rolled `Math.round(v * 1e6) / 1e6` could ship
+ * undetected until an airframe's pitch happened to land on a tie. It is a hash
+ * rather than a list of numbers because the differ compares numerically with a
+ * 1e-6 tolerance, which is precisely the size of the disagreement being looked
+ * for -- an exact string hash is the only thing that can see it.
+ */
+export function geometryFingerprint(ac) {
+  const g = geometryPayload(ac)
+  const parts = [
+    g.id, i(g.aisleCount), i(g.seatCount), i(g.maxDepth),
+    f6(g.lengthM), i(g.binBagsPerRowSide),
+  ]
+  for (const r of g.rows) parts.push(i(r.slot), i(r.number), f6(r.x), f6(r.pitch))
+  for (const s of g.seats) {
+    parts.push(i(s.index), s.id, f6(s.x), i(s.rowSlot), i(s.aisle),
+      i(s.depth), i(s.blockId), i(s.binRun))
+  }
+  for (const d of g.doors) parts.push(d.id, f6(d.x), i(d.aisle))
+  return fnv1a32(parts.join('|'))
+}
+
 export function seatedCurve(sitTimes, total) {
   const ordered = sitTimes.slice().sort((a, b) => a - b)
   const steps = Math.floor(total / CURVE_STEP + 1e-9) + 1
@@ -259,6 +301,7 @@ export function digestFor(fixture) {
   }
   return {
     config_hash: fnv1a32(canonical(cfgRaw)),
+    geometry_hash: geometryFingerprint(ac),
     totalSeconds: r9(result.totalSeconds),
     paxCount: result.paxCount,
     seatCount: result.seatCount,

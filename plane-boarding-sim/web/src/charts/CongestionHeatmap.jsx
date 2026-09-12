@@ -3,11 +3,15 @@ import { ChartFrame, emptyCopy } from './primitives/ChartFrame.jsx'
 import { AxisBottom } from './primitives/Axis.jsx'
 import { ChartTooltip, useTooltip, localPoint } from './primitives/Tooltip.jsx'
 import { HeatLegend } from './primitives/Legend.jsx'
+import { HeatCanvas } from './primitives/HeatCanvas.jsx'
 import { timeScale } from './primitives/scales.js'
 import { heatColor, heatLevel, heatBins } from './primitives/palette.js'
 import { formatDuration, formatDurationTick, formatNumber } from './primitives/format.js'
 import { thinTicks } from './primitives/ticks.js'
-import { useSeries, matrixExtent } from './selectors.js'
+import { useSeries, matrixExtent, sampleIntervalOf, rowNumbersOf } from './selectors.js'
+
+/** "2s" / "2.5s" — the sample interval as the caption writes it. */
+const everySeconds = (s) => `${Number.isInteger(s) ? s : Number(s.toFixed(2))}s`
 
 /**
  * Chart 4 — Aisle congestion heatmap (row × time).
@@ -18,6 +22,23 @@ import { useSeries, matrixExtent } from './selectors.js'
  *
  * One matrix at a time; the chart follows the first strategy left visible in
  * the dashboard filter rather than growing a filter of its own.
+ *
+ * Two things this chart must read rather than guess, because guessing them
+ * produced confidently wrong numbers:
+ *
+ * - **Column width is `meta.sampleInterval`** (ENGINE_SPEC §7), not
+ *   `totalSeconds.mean / columns`. The matrix is a fixed 2 s grid that stops
+ *   when the shortest replication stopped, so the ratio is off by the
+ *   truncation — 2.234 s instead of 2.0 on a320neo/random/0.92, an 11.7%
+ *   stretch of the x axis and of every "worst jam at N seconds" read-out.
+ * - **Rows are row SLOTS, not row numbers** (ENGINE_SPEC §2.1). Labels come
+ *   from `meta.rowSlots[].number`; without it the chart labels by slot instead
+ *   of inventing a row number.
+ *
+ * The cells are painted on a canvas (`HeatCanvas`) rather than as one `<rect>`
+ * each: this matrix is 10,000-20,000 cells and it re-renders on every progress
+ * tick of a streaming batch. Axes, frame, hit layer and table view stay in the
+ * DOM, so hover, keyboard and screen-reader behaviour are unchanged.
  */
 export function CongestionHeatmap({ batch, hidden, height = 320 }) {
   const { all, visible } = useSeries(batch, hidden)
@@ -32,8 +53,24 @@ export function CongestionHeatmap({ batch, hidden, height = 320 }) {
     const buckets = matrix.reduce((m, row) => Math.max(m, row?.length ?? 0), 0)
     if (buckets === 0) return null
     const [min, max] = matrixExtent(matrix)
-    const totalSeconds = target.entry?.totalSeconds?.mean ?? buckets * 30
-    const bucketSeconds = totalSeconds / buckets
+    const rows = matrix.length
+
+    // Seconds per column: read from the batch, never divided out of the mean.
+    const bucketSeconds = sampleIntervalOf(batch)
+    const coveredSeconds = buckets * bucketSeconds
+    const meanTotal = target.entry?.totalSeconds?.mean
+    // The aggregator averages over the columns every replication has, so a
+    // batch whose runs differ in length is cropped to the shortest one — and
+    // the tail is where the late jams are. We cannot un-crop it here; we can
+    // refuse to pretend the window is the whole run.
+    const truncated = Number.isFinite(meanTotal) && meanTotal > coveredSeconds * 1.02
+
+    const { numbers, exact } = rowNumbersOf(batch, rows)
+    // Slot index -> printed row number. Without the mapping we say "slot",
+    // because `slot + 1` is only the row number on an aircraft that starts at
+    // row 1 and skips nothing.
+    const rowName = (r) => (exact ? `Row ${numbers[r]}` : `Row slot ${r}`)
+    const rowTick = (r) => (exact ? `${numbers[r]}` : `${r}`)
 
     let peak = { value: -Infinity, row: 0, bucket: 0 }
     matrix.forEach((row, r) =>
@@ -41,23 +78,52 @@ export function CongestionHeatmap({ batch, hidden, height = 320 }) {
         if (Number.isFinite(v) && v > peak.value) peak = { value: v, row: r, bucket: b }
       }),
     )
-    return { target, matrix, buckets, rows: matrix.length, min, max, bucketSeconds, totalSeconds, peak }
-  }, [visible])
+    return {
+      target,
+      matrix,
+      buckets,
+      rows,
+      min,
+      max,
+      bucketSeconds,
+      coveredSeconds,
+      meanTotal,
+      truncated,
+      rowNumbers: numbers,
+      rowsExact: exact,
+      rowName,
+      rowTick,
+      peak,
+    }
+  }, [visible, batch])
 
   const empty = model == null
   const bins = model ? heatBins(model.min, model.max) : []
 
+  // Said the same way in the caption, the footnote and the description: this
+  // window is shorter than the runs it summarises.
+  const windowNote = model?.truncated
+    ? `Covers the first ${formatDuration(model.coveredSeconds)} of boarding against a mean run of ` +
+      `${formatDuration(model.meanTotal)} — the matrix stops where the shortest replication stopped, ` +
+      'so any jam later than that is not in this batch.'
+    : null
+
   const ariaLabel = empty
     ? 'Aisle congestion heatmap — no matrix yet.'
-    : `Aisle congestion for ${model.target.label}: mean bodies standing in the aisle by cabin row and time. ` +
-      `The worst jam is ${model.peak.value.toFixed(1)} people at row ${model.peak.row + 1}, around ` +
-      `${formatDuration(model.peak.bucket * model.bucketSeconds)} into boarding.`
+    : `Aisle congestion for ${model.target.label}: mean bodies standing in the aisle by cabin ` +
+      `${model.rowsExact ? 'row' : 'row slot'} and time, sampled every ${everySeconds(model.bucketSeconds)}. ` +
+      `The worst jam is ${model.peak.value.toFixed(1)} people at ${model.rowName(model.peak.row).toLowerCase()}, around ` +
+      `${formatDuration(model.peak.bucket * model.bucketSeconds)} into boarding.` +
+      (windowNote ? ` ${windowNote}` : '')
 
   const table = model
     ? {
-        caption: `Mean bodies in the aisle by row, sampled every ${Math.round(model.bucketSeconds)}s — ${model.target.label}.`,
+        caption:
+          `Mean bodies in the aisle by ${model.rowsExact ? 'row' : 'row slot'}, sampled every ` +
+          `${everySeconds(model.bucketSeconds)} — ${model.target.label}.` +
+          (windowNote ? ` ${windowNote}` : ''),
         columns: [
-          { key: 'row', label: 'Row' },
+          { key: 'row', label: model.rowsExact ? 'Row' : 'Row slot' },
           { key: 'peak', label: 'Peak bodies', align: 'right' },
           { key: 'at', label: 'Peak at', align: 'right' },
           { key: 'mean', label: 'Mean bodies', align: 'right' },
@@ -68,7 +134,7 @@ export function CongestionHeatmap({ batch, hidden, height = 320 }) {
           const at = (row ?? []).indexOf(peak)
           return {
             key: `row-${r}`,
-            row: `Row ${r + 1}`,
+            row: model.rowName(r),
             peak: peak.toFixed(2),
             at: formatDuration(at * model.bucketSeconds),
             mean: cells.length ? (cells.reduce((a, b) => a + b, 0) / cells.length).toFixed(2) : '—',
@@ -103,8 +169,24 @@ export function CongestionHeatmap({ batch, hidden, height = 320 }) {
       onPointerLeave={hide}
       footnote={
         model
-          ? 'Rows run front (top) to rear (bottom); time runs left to right. A bright horizontal streak is a queue parked at one row — that is a jam, not traffic. One strategy at a time: the first one left visible in the filter above.'
+          ? 'Rows run front (top) to rear (bottom); time runs left to right. A bright horizontal streak is a queue parked at one row — that is a jam, not traffic. One strategy at a time: the first one left visible in the filter above.' +
+            (windowNote ? ` ${windowNote}` : '')
           : null
+      }
+      overlay={({ innerWidth, innerHeight, margin }) =>
+        model ? (
+          <HeatCanvas
+            matrix={model.matrix}
+            rows={model.rows}
+            columns={model.buckets}
+            min={model.min}
+            max={model.max}
+            width={innerWidth}
+            height={innerHeight}
+            left={margin.left}
+            top={margin.top}
+          />
+        ) : null
       }
       tooltip={({ width, height: h }) => <ChartTooltip tip={tip} width={width} height={h} />}
     >
@@ -113,10 +195,11 @@ export function CongestionHeatmap({ batch, hidden, height = 320 }) {
         const { matrix, buckets, rows, bucketSeconds, min, max } = model
         const cellW = innerWidth / buckets
         const cellH = innerHeight / rows
-        const gap = cellW >= 6 && cellH >= 6 ? 1 : 0
-        const x = timeScale({ domain: [0, buckets * bucketSeconds], range: [0, innerWidth] })
+        const x = timeScale({ domain: [0, model.coveredSeconds], range: [0, innerWidth] })
         const xTicks = thinTicks(x.ticks(innerWidth < 340 ? 3 : 6), 6)
-        const rowTicks = [1, Math.ceil(rows / 2), rows]
+        // Slot indices, not row numbers: these place the label. The text comes
+        // from `rowTick`, which knows the difference.
+        const rowTicks = [...new Set([0, Math.floor((rows - 1) / 2), rows - 1])].filter((r) => r >= 0)
 
         return (
           <>
@@ -130,31 +213,17 @@ export function CongestionHeatmap({ batch, hidden, height = 320 }) {
               strokeWidth={1}
               shapeRendering="crispEdges"
             />
-            {matrix.map((row, r) =>
-              (row ?? []).map((v, b) => (
-                <rect
-                  key={`${r}-${b}`}
-                  className="ch-animate"
-                  x={b * cellW}
-                  y={r * cellH}
-                  width={Math.max(0.5, cellW - gap)}
-                  height={Math.max(0.5, cellH - gap)}
-                  fill={heatColor(heatLevel(v, min, max))}
-                  shapeRendering="crispEdges"
-                />
-              )),
-            )}
 
             {rowTicks.map((r) => (
               <text
                 key={`rt-${r}`}
                 x={-8}
-                y={(r - 0.5) * cellH + 4}
+                y={(r + 0.5) * cellH + 4}
                 textAnchor="end"
                 className="num"
                 style={{ fill: 'var(--text-3)', fontSize: 10 }}
               >
-                {r}
+                {model.rowTick(r)}
               </text>
             ))}
             <text
@@ -162,7 +231,7 @@ export function CongestionHeatmap({ batch, hidden, height = 320 }) {
               textAnchor="middle"
               style={{ fill: 'var(--text-2)', fontSize: 11, fontWeight: 500 }}
             >
-              Cabin row
+              {model.rowsExact ? 'Cabin row' : 'Cabin row slot'}
             </text>
 
             <AxisBottom
@@ -189,7 +258,7 @@ export function CongestionHeatmap({ batch, hidden, height = 320 }) {
                 const r = Math.max(0, Math.min(rows - 1, Math.floor((pt.y - margin.top) / cellH)))
                 const value = matrix[r]?.[b]
                 show(pt.x, pt.y, {
-                  title: `Row ${r + 1}`,
+                  title: model.rowName(r),
                   subtitle: `${formatDuration(b * bucketSeconds)} – ${formatDuration((b + 1) * bucketSeconds)}`,
                   rows: [
                     {
@@ -204,7 +273,7 @@ export function CongestionHeatmap({ batch, hidden, height = 320 }) {
               }}
               onFocus={() =>
                 show(x(model.peak.bucket * bucketSeconds) + margin.left, model.peak.row * cellH + margin.top, {
-                  title: `Worst jam — row ${model.peak.row + 1}`,
+                  title: `Worst jam — ${model.rowName(model.peak.row).toLowerCase()}`,
                   subtitle: formatDuration(model.peak.bucket * bucketSeconds),
                   rows: [
                     {

@@ -8,7 +8,7 @@ import { linePath } from './primitives/shapes.js'
 import { niceDomain } from './primitives/ticks.js'
 import { formatDuration, formatDurationTick, formatNumber } from './primitives/format.js'
 import { ORDINAL_STEPS_3 } from './primitives/palette.js'
-import { useSeries } from './selectors.js'
+import { useSeries, sampleIntervalOf } from './selectors.js'
 
 const SECTIONS = [
   { key: 'fwd', label: 'Forward third', opacity: ORDINAL_STEPS_3[0] },
@@ -42,8 +42,13 @@ export function AisleThroughput({ batch, hidden, height = 300 }) {
     const rows = matrix.length
     const buckets = matrix.reduce((m, r) => Math.max(m, r?.length ?? 0), 0)
     if (buckets === 0) return null
-    const totalSeconds = target.entry?.totalSeconds?.mean ?? buckets * 30
-    const bucketSeconds = totalSeconds / buckets
+    // Seconds per column of the congestion matrix. ENGINE_SPEC §7: it is
+    // SAMPLED at `sampleInterval`, so it is read, not divided out of the mean
+    // run length — that ratio is off by however much the matrix was truncated.
+    const bucketSeconds = sampleIntervalOf(batch)
+    const totalSeconds = target.entry?.totalSeconds?.mean
+    const coveredSeconds = buckets * bucketSeconds
+    const truncated = Number.isFinite(totalSeconds) && totalSeconds > coveredSeconds * 1.02
     const edge = Math.ceil(rows / 3)
 
     const samples = []
@@ -61,20 +66,31 @@ export function AisleThroughput({ batch, hidden, height = 300 }) {
     }
     const peak = samples.reduce((best, s) => (best == null || s.total > best.total ? s : best), null)
     const maxTotal = peak?.total ?? 1
-    return { target, samples, bucketSeconds, totalSeconds, peak, maxTotal, buckets }
-  }, [visible])
+    return { target, samples, bucketSeconds, totalSeconds, coveredSeconds, truncated, peak, maxTotal, buckets }
+  }, [visible, batch])
 
   const empty = model == null
+
+  // The matrix stops with the shortest replication; say so rather than let the
+  // area chart imply that boarding ended there.
+  const windowNote = model?.truncated
+    ? `Covers the first ${formatDuration(model.coveredSeconds)} of boarding against a mean run of ` +
+      `${formatDuration(model.totalSeconds)} — the congestion matrix stops where the shortest ` +
+      'replication stopped.'
+    : null
 
   const ariaLabel = empty
     ? 'Aisle throughput — no congestion matrix yet.'
     : `Bodies standing in the aisle over time for ${model.target.label}, split by cabin third. ` +
       `The aisle peaks at ${model.peak.total.toFixed(1)} people around ${formatDuration(model.peak.t)}, ` +
-      `mostly in the ${['forward third', 'mid cabin', 'aft third'][[model.peak.fwd, model.peak.mid, model.peak.aft].indexOf(Math.max(model.peak.fwd, model.peak.mid, model.peak.aft))]}.`
+      `mostly in the ${['forward third', 'mid cabin', 'aft third'][[model.peak.fwd, model.peak.mid, model.peak.aft].indexOf(Math.max(model.peak.fwd, model.peak.mid, model.peak.aft))]}.` +
+      (windowNote ? ` ${windowNote}` : '')
 
   const table = model
     ? {
-        caption: `Bodies in the aisle by cabin third — ${model.target.label}.`,
+        caption:
+          `Bodies in the aisle by cabin third — ${model.target.label}.` +
+          (windowNote ? ` ${windowNote}` : ''),
         columns: [
           { key: 'time', label: 'Time' },
           ...SECTIONS.map((s) => ({ key: s.key, label: s.label, align: 'right' })),
@@ -112,7 +128,12 @@ export function AisleThroughput({ batch, hidden, height = 300 }) {
         )
       }
       onPointerLeave={() => { hide(); setCrosshair(null) }}
-      footnote={model ? 'A flat-topped plateau means the aisle is saturated — extra passengers at the door just queue. A spiky, low profile means the aisle is starved and the door is the bottleneck. One strategy at a time: the first one left visible in the filter above.' : null}
+      footnote={
+        model
+          ? 'A flat-topped plateau means the aisle is saturated — extra passengers at the door just queue. A spiky, low profile means the aisle is starved and the door is the bottleneck. One strategy at a time: the first one left visible in the filter above.' +
+            (windowNote ? ` ${windowNote}` : '')
+          : null
+      }
       tooltip={({ width, height: h }) => <ChartTooltip tip={tip} width={width} height={h} />}
     >
       {({ innerWidth, innerHeight, margin }) => {

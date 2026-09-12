@@ -163,6 +163,106 @@ def test_a_squeeze_always_resolves():
             f"stower {i} still had {alongside} alongside on its last stowing frame")
 
 
+def squeeze_lock_audit(aid="a320neo", strategy="random", seed=3, **ov):
+    """Audit the squeeze LOCK, which the replay format deliberately does not
+    carry, via `engine.run(tick_hook=...)`.
+
+    Returns `(result, approaching, exiting)` where the two counters split every
+    (STOWING i, WALKING/SHUFFLING j) pair that is inside `i`'s body-depth zone
+    while `j` does NOT hold `i`'s squeeze lock, by which side of `i` the walker
+    is on **in its own direction of travel**:
+
+    * `exiting`     -- `j` has already crossed `i`. Legal and expected: the lock
+      hands over to the next stower as soon as the passer's obstruction changes
+      rather than when it is fully clear, which is deliberate (see
+      `test_only_one_passenger_is_ever_in_a_stower_squeeze_gap`) and is what
+      keeps a passer from being stuck holding a lock it cannot release.
+    * `approaching` -- `j` has NOT crossed `i` and is sitting inside its zone
+      unowned. **Must be zero.** This is the deadlock: `stow_done[i]` shuts the
+      squeeze to new entrants once `i`'s stow finishes, so `j` can never acquire
+      the lock, `j`'s gap clamps to 0, and `stower_clear(i)` never comes true
+      because `j` is inside BODY_DEPTH. Circular wait.
+    """
+    cfg = cfg_for(aid, strategy, seed=seed, **ov)
+    ac = get_aircraft(cfg.aircraftId)
+    counts = [0, 0]          # [approaching, exiting]
+    first_bad: list = []
+
+    def hook(tick, t, pstate, px, plane, pdir, passing, pass_holder):
+        # One pass to collect the two short lists, rather than n^2 over the
+        # whole manifest every tick: at 180 passengers this is the difference
+        # between a two-second test and a two-minute one.
+        stowers = [i for i, s in enumerate(pstate) if s == STOWING]
+        if not stowers:
+            return
+        movers = [i for i, s in enumerate(pstate) if s == WALKING or s == SHUFFLING]
+        for i in stowers:
+            xi, li, holder = px[i], plane[i], pass_holder[i]
+            for j in movers:
+                if plane[j] != li or holder == j:
+                    continue
+                if abs(px[j] - xi) >= BODY_DEPTH - 1e-9:
+                    continue
+                if pdir[j] * (px[j] - xi) > 0.0:
+                    counts[1] += 1
+                else:
+                    counts[0] += 1
+                    if not first_bad:
+                        first_bad.append(
+                            f"tick {tick} (t={t:.2f}s): passenger {j} is {abs(px[j] - xi):.3f} m "
+                            f"behind stower {i} (BODY_DEPTH={BODY_DEPTH}) without holding "
+                            f"its squeeze lock (held by {holder})")
+
+    result, _ = run(cfg, ac, tick_hook=hook)
+    return result, counts[0], counts[1], (first_bad[0] if first_bad else "")
+
+
+#: The corners that used to wedge. `dt` (max 0.5) and `stowPassSpeedFactor`
+#: (max 1.0) are both plain sliders in the shipped UI, so every one of these is
+#: reachable by a user dragging two controls.
+SQUEEZE_GRID = [(0.1, 0.4), (0.3, 0.6), (0.4, 0.8), (0.4, 1.0), (0.5, 0.8), (0.5, 1.0)]
+
+
+@pytest.mark.parametrize("dt,factor", SQUEEZE_GRID)
+@pytest.mark.parametrize("seed", [1, 3])
+def test_a_walker_inside_a_stowers_zone_holds_that_stowers_lock(dt, factor, seed):
+    """THE assertion that would have caught the squeeze-past deadlock.
+
+    The step of a squeezing passenger is bounded by the very next body beyond
+    the stower it owns. It used to be bounded by the first NON-STOWING body,
+    skipping any intervening stowers -- so a passer could come to rest inside a
+    second stower's exclusion zone holding no lock on it, and once that stow
+    finished the pair could never separate. Measured before the fix: 4
+    permanently wedged pairs at dt 0.5 / factor 1.0 and a run that never
+    completed; one violation even on a seed that did complete, which is why
+    "did it finish" is not a sufficient test.
+
+    Exiting-side company is permitted and does occur at the shipped default --
+    that is the documented lock handover, not a violation.
+
+    The ownership assertion comes FIRST because it is strictly stronger than
+    "the run finished": before the fix, dt 0.5 / factor 0.8 / seed 3 completed
+    normally and still put a walker inside an unowned stower's zone once.
+    """
+    result, approaching, exiting, detail = squeeze_lock_audit(
+        seed=seed, dt=dt, stowPassSpeedFactor=factor)
+    assert approaching == 0, (
+        f"dt={dt} factor={factor} seed={seed}: {approaching} tick(s) with a walker "
+        f"inside an unowned stower's zone on the APPROACH side -- {detail}")
+    assert result.completed, (
+        f"dt={dt} factor={factor} seed={seed}: run hit MAX_SIM_SECONDS")
+
+
+def test_the_squeeze_lock_audit_sees_real_squeezes():
+    """Anti-vacuity guard for the test above: at the shipped default the audit
+    must observe the handover transient it exists to permit. If this ever hits
+    zero, the ownership assertion has stopped proving anything."""
+    result, approaching, exiting, _ = squeeze_lock_audit(seed=3, loadFactor=0.9)
+    assert result.completed
+    assert approaching == 0
+    assert exiting > 0, "no lock handover ever observed -- the audit proves nothing"
+
+
 def test_nobody_moves_faster_than_their_own_walk_speed():
     cfg, ac, result, replay, speed, lanes = trace("a320neo", "random")
     states, xs = replay["frames"]["state"], replay["frames"]["x"]

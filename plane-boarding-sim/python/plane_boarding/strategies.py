@@ -626,8 +626,25 @@ def apply_post_processing(
         out = cohered
 
     # 3. Non-compliance. 15% of passengers ignore the group they were called in.
+    #
+    # ENGINE_SPEC 1.3 pins the behaviour stream as Bernoulli(nonComplianceRate),
+    # then -- ONLY IF THAT CAME UP -- randint(2*jitter+1), then
+    # Bernoulli(lateRate). Both conditions in that sentence are on the Bernoulli,
+    # not on `complianceJitter`, and that is the whole point: the draw sequence
+    # must not be a function of the jitter WIDTH, or else who arrives late
+    # changes when you move a slider that has nothing to do with lateness.
+    #
+    # This used to gate the entire step on `rate > 0 and jitter > 0`, so at
+    # jitter 0 the compliance Bernoulli was never drawn and the late Bernoulli
+    # became the first draw instead of the second. Parity was never at risk
+    # (both engines did the same wrong thing); the CRN property this phase
+    # separation exists to provide was.
+    #
+    # `randint(1)` at jitter 0 consumes exactly one draw and returns 0, so
+    # drawing it unconditionally costs nothing and moves nobody -- which is why
+    # the sequence stays fixed while the behaviour stays correct.
     jitter = cfg.complianceJitter
-    do_jitter = cfg.nonComplianceRate > 0 and jitter > 0
+    do_jitter = cfg.nonComplianceRate > 0
     do_late = cfg.lateRate > 0
     if do_jitter or do_late:
         behaviour = {p.id: behaviour_rng(p) for p in out}

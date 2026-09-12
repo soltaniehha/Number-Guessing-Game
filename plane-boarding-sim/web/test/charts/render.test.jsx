@@ -23,6 +23,7 @@ import {
   makeStreamingBatch,
   makeEmptyBatch,
 } from '../../src/charts/__fixtures__/makeBatch.js'
+import { installCanvasStub } from './stubCanvas.js'
 
 const CHARTS = [
   ['BoardingTimeByStrategy', BoardingTimeByStrategy],
@@ -63,6 +64,8 @@ function click(el) {
 
 beforeAll(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  // jsdom has no canvas backend; the heatmap's cell layer paints on one.
+  installCanvasStub()
 })
 
 afterEach(() => {

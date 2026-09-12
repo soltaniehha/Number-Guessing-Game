@@ -28,7 +28,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "python"))
 
-from plane_boarding.aircraft import get_aircraft            # noqa: E402
+from plane_boarding.aircraft import geometry_payload, get_aircraft  # noqa: E402
 from plane_boarding.config import build_config              # noqa: E402
 from plane_boarding.engine import simulate                  # noqa: E402
 
@@ -60,6 +60,50 @@ def r9(value: float) -> float:
     return 0.0 if out == 0 else out
 
 
+def f6(value: float) -> str:
+    """A 6-dp float as fixed-point text, with -0.0 normalised to 0.0.
+
+    Fixed-point rather than the language's own float repr, because Python
+    prints an integral float as `1.0` and JavaScript prints it as `1`. Every
+    value fed to this has already been through `round(x, 6)`, so it sits within
+    an ulp of a 6-dp decimal and both `%.6f` and `Number.toFixed(6)` recover
+    that decimal exactly -- there is no tie for their differing tie rules to
+    disagree about.
+    """
+    return "%.6f" % (value + 0.0)
+
+
+def i(value: int) -> str:
+    return str(int(value))
+
+
+def geometry_fingerprint(ac: Any) -> str:
+    """Hash every ROUNDED value in `geometry_payload`, plus the identifiers that
+    give them meaning.
+
+    The digest covers the simulation but used to stop at the cabin door: nothing
+    in it depended on the geometry payload, so a rounding disagreement between
+    `round(x, 6)` and a hand-rolled `Math.round(v * 1e6) / 1e6` could ship
+    undetected until an airframe's pitch happened to land on a tie. It is a hash
+    rather than a list of numbers because the differ compares numerically with a
+    1e-6 tolerance, which is precisely the size of the disagreement being looked
+    for -- an exact string hash is the only thing that can see it.
+    """
+    g = geometry_payload(ac)
+    parts: List[str] = [
+        g["id"], i(g["aisleCount"]), i(g["seatCount"]), i(g["maxDepth"]),
+        f6(g["lengthM"]), i(g["binBagsPerRowSide"]),
+    ]
+    for r in g["rows"]:
+        parts += [i(r["slot"]), i(r["number"]), f6(r["x"]), f6(r["pitch"])]
+    for s in g["seats"]:
+        parts += [i(s["index"]), s["id"], f6(s["x"]), i(s["rowSlot"]), i(s["aisle"]),
+                  i(s["depth"]), i(s["blockId"]), i(s["binRun"])]
+    for d in g["doors"]:
+        parts += [d["id"], f6(d["x"]), i(d["aisle"])]
+    return fnv1a32("|".join(parts))
+
+
 def seated_curve(sit_times: Sequence[float], total: float) -> List[List[float]]:
     """Cumulative seated count on a fixed 10 s grid, computed from the sit times
     themselves rather than from the engine's sampled curve -- the sampling
@@ -84,6 +128,7 @@ def digest_for(fixture: Dict[str, Any]) -> Dict[str, Any]:
     sits = [p.sitTime for p in result.perPassenger]
     return {
         "config_hash": fnv1a32(canonical(cfg_in)),
+        "geometry_hash": geometry_fingerprint(ac),
         "totalSeconds": r9(result.totalSeconds),
         "paxCount": result.paxCount,
         "seatCount": result.seatCount,

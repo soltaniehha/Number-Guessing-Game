@@ -27,6 +27,15 @@ const gaussian = (rand) => {
 
 /* ---------- cabin ------------------------------------------------------- */
 
+/**
+ * The engine's congestion sample interval (`parity/defaults.json`).
+ * ENGINE_SPEC §7: the congestion matrix is one column per sample, so this is
+ * the column spacing the charts must be told about — never a ratio.
+ */
+export const SAMPLE_INTERVAL = 2
+
+const range = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => from + i)
+
 export const A320 = {
   aircraftId: 'a320neo',
   rows: 30,
@@ -34,6 +43,26 @@ export const A320 = {
   /** distance from the aisle: 3 = window, 2 = middle, 1 = aisle */
   depthOf: (letter) => ({ A: 3, B: 2, C: 1, D: 1, E: 2, F: 3 }[letter] ?? 2),
 }
+
+/**
+ * A cabin whose printed row numbers are NOT its row slots.
+ *
+ * The 787-9's roster geometry: business 1-12, premium 20-22, then economy
+ * 30-35 and 42-57 (RESEARCH_AIRCRAFT / `parity/aircraft.json`). 37 row slots,
+ * and slot 21 is row 42 — so any chart that labels a slot `slot + 1` is wrong
+ * on 25 of the 37 rows.
+ */
+export const B787 = {
+  aircraftId: 'b787_9',
+  rowNumbers: [...range(1, 12), ...range(20, 22), ...range(30, 35), ...range(42, 57)],
+  letters: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J'],
+  depthOf: (letter) =>
+    ({ A: 3, B: 2, C: 1, D: 1, E: 2, F: 2, G: 1, H: 1, J: 2 }[letter] ?? 2),
+}
+
+/** Printed row numbers of a cabin fixture, fore to aft, one per row slot. */
+export const cabinRows = (cabin) =>
+  Array.isArray(cabin?.rowNumbers) ? [...cabin.rowNumbers] : range(1, cabin?.rows ?? 0)
 
 /* ---------- strategy profiles ------------------------------------------ */
 
@@ -164,7 +193,7 @@ function seatedCurveMean(profile, meanTotal, paxCount, sampleInterval = 15) {
   return points
 }
 
-function congestionMean(profile, meanTotal, rows, rand, bucketSeconds = 30) {
+function congestionMean(profile, meanTotal, rows, rand, bucketSeconds = SAMPLE_INTERVAL) {
   const buckets = Math.max(4, Math.ceil(meanTotal / bucketSeconds))
   const matrix = []
   for (let r = 0; r < rows; r++) {
@@ -227,8 +256,9 @@ function pooledWaits(profile, paxCount, rand, sampleSize = 240) {
 function seatTimeMean(profile, cabin, rand) {
   const out = {}
   const base = profile.mean * 0.3
-  for (let row = 1; row <= cabin.rows; row++) {
-    const rowNorm = (row - 1) / (cabin.rows - 1)
+  const rowNumbers = cabinRows(cabin)
+  rowNumbers.forEach((row, slot) => {
+    const rowNorm = rowNumbers.length > 1 ? slot / (rowNumbers.length - 1) : 0
     for (const letter of cabin.letters) {
       const depth = cabin.depthOf(letter)
       const depthNorm = (depth - 1) / 2
@@ -240,7 +270,7 @@ function seatTimeMean(profile, cabin, rand) {
           0.07 * (rand() - 0.5))
       out[`${row}${letter}`] = Math.round(Math.max(15, value) * 10) / 10
     }
-  }
+  })
   return out
 }
 
@@ -295,7 +325,8 @@ export function makeBatch({
   runsRequested = null,
   cabin = A320,
 } = {}) {
-  const seatCount = cabin.rows * cabin.letters.length
+  const rowNumbers = cabinRows(cabin)
+  const seatCount = rowNumbers.length * cabin.letters.length
   const paxCount = Math.round(seatCount * loadFactor)
   const byStrategy = {}
 
@@ -337,7 +368,7 @@ export function makeBatch({
       },
       meanGateChecks: profile.gateChecks,
       seatedCurveMean: seatedCurveMean(profile, mean, paxCount),
-      congestionMean: congestionMean(profile, mean, cabin.rows, mulberry32(seed + si * 31 + 5)),
+      congestionMean: congestionMean(profile, mean, rowNumbers.length, mulberry32(seed + si * 31 + 5)),
       perPassengerPooled: pooledWaits(profile, paxCount, mulberry32(seed + si * 104729)),
       seatTimeMean: seatTimeMean(profile, cabin, mulberry32(seed + si * 15485863)),
       convergence: convergenceOf(values),
@@ -354,6 +385,12 @@ export function makeBatch({
       loadFactor,
       paxCount,
       seatCount,
+      // Seconds per congestion column (ENGINE_SPEC §7) — the charts read this
+      // rather than dividing the mean run length by the column count.
+      sampleInterval: SAMPLE_INTERVAL,
+      // Row slot -> printed row number (ENGINE_SPEC §2.1). The congestion
+      // matrix is indexed by slot; only this says what to call each one.
+      rowSlots: rowNumbers.map((number, slot) => ({ slot, number })),
     },
   }
 
@@ -416,7 +453,14 @@ export function makeStreamingBatch(options = {}) {
 export function makeEmptyBatch() {
   return {
     byStrategy: {},
-    meta: { aircraftId: A320.aircraftId, runsRequested: 200, runsDone: 0, complete: false },
+    meta: {
+      aircraftId: A320.aircraftId,
+      runsRequested: 200,
+      runsDone: 0,
+      complete: false,
+      sampleInterval: SAMPLE_INTERVAL,
+      rowSlots: cabinRows(A320).map((number, slot) => ({ slot, number })),
+    },
   }
 }
 
@@ -424,7 +468,8 @@ export function makeEmptyBatch() {
 export function makeRun({ strategy = 'wilma', seed = 4242, loadFactor = 0.95, cabin = A320 } = {}) {
   const profile = STRATEGY_PROFILES[strategy] ?? STRATEGY_PROFILES.wilma
   const rand = mulberry32(seed)
-  const seatCount = cabin.rows * cabin.letters.length
+  const rowNumbers = cabinRows(cabin)
+  const seatCount = rowNumbers.length * cabin.letters.length
   const paxCount = Math.round(seatCount * loadFactor)
   const totalSeconds = Math.round(profile.mean * (1 + profile.cv * gaussian(rand)) * 10) / 10
   const pooled = pooledWaits(profile, paxCount, mulberry32(seed + 1))
@@ -439,9 +484,9 @@ export function makeRun({ strategy = 'wilma', seed = 4242, loadFactor = 0.95, ca
     seatCount,
     loadFactor,
     seatedCurve: seatedCurveMean(profile, totalSeconds, paxCount).map(({ t, seated }) => ({ t, seated })),
-    aisleOccupancy: congestionMean(profile, totalSeconds, cabin.rows, mulberry32(seed + 2))[0]
-      .map((count, i) => ({ t: i * 30, count: Math.round(count * paxCount * 0.04) })),
-    congestion: congestionMean(profile, totalSeconds, cabin.rows, mulberry32(seed + 3)),
+    aisleOccupancy: congestionMean(profile, totalSeconds, rowNumbers.length, mulberry32(seed + 2))[0]
+      .map((count, i) => ({ t: i * SAMPLE_INTERVAL, count: Math.round(count * paxCount * 0.04) })),
+    congestion: congestionMean(profile, totalSeconds, rowNumbers.length, mulberry32(seed + 3)),
     perPassenger: [],
     timeBreakdown: {
       walk: Math.round(paxSeconds * profile.breakdown.walk),

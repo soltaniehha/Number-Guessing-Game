@@ -389,6 +389,69 @@ it('sends late arrivals to the very back', () => {
   )
 })
 
+/**
+ * Recover the set of passenger ids that step 4 moved to the back.
+ *
+ * `buildOrder` emits `ontime + late`, both subsequences of the order the same
+ * scenario produces with `lateRate = 0`, so ranking the late-enabled queue
+ * against the late-free one gives two increasing runs and the split between them
+ * is where the late block starts. Mirrors `_late_block` in
+ * `python/tests/test_strategies.py`.
+ */
+function lateBlock(overrides = {}, seed = 7) {
+  const s = makeQueue(cfgFor('a320neo', 'random', seed, { lateRate: 0.0, ...overrides })).queue
+  const a = makeQueue(cfgFor('a320neo', 'random', seed, { lateRate: 0.3, ...overrides })).queue
+  const rank = new Map(s.map((p, i) => [p.id, i]))
+  const seq = a.map((p) => rank.get(p.id))
+  const rising = (xs) => xs.every((v, i) => i === 0 || xs[i - 1] < v)
+  for (let m = 0; m <= seq.length; m++) {
+    if (rising(seq.slice(0, m)) && rising(seq.slice(m))) {
+      return new Set(a.slice(m).map((p) => p.id))
+    }
+  }
+  throw new Error('queue is not a merge of two ordered runs')
+}
+
+it('does not let the compliance jitter decide who arrives late', () => {
+  // ENGINE_SPEC 1.3: the behaviour stream is Bernoulli(nonComplianceRate), then
+  // -- only if that came up -- randint(2*jitter+1), then Bernoulli(lateRate).
+  // Both conditions are on the Bernoulli, so the number of draws a passenger
+  // consumes before their late draw must not depend on the jitter WIDTH.
+  //
+  // It used to. The whole step was gated on `jitter > 0`, so at jitter 0 the
+  // compliance Bernoulli was skipped and the late draw became the first draw
+  // instead of the second -- which made `complianceJitter`, a slider about queue
+  // discipline, silently re-roll which passengers turn up late. Both engines did
+  // the same wrong thing, so parity never noticed.
+  const base = lateBlock({ nonComplianceRate: 0.15, complianceJitter: 0 })
+  expect(base.size, 'nobody was late -- the test proves nothing').toBeGreaterThan(0)
+  for (const complianceJitter of [1, 2, 6, 12]) {
+    const other = lateBlock({ nonComplianceRate: 0.15, complianceJitter })
+    expect([...other].sort((x, y) => x - y), `complianceJitter=${complianceJitter}`).toEqual(
+      [...base].sort((x, y) => x - y),
+    )
+  }
+})
+
+it('consumes the compliance Bernoulli even at zero jitter', () => {
+  // The same fix from the other side: at jitter 0 the compliance draw cannot
+  // move anybody, but it must still be TAKEN, so the late set differs from the
+  // one you get with the rate itself at zero.
+  const order = (overrides) =>
+    makeQueue(cfgFor('a320neo', 'random', 7, { complianceJitter: 0, ...overrides })).queue.map(
+      (p) => p.id,
+    )
+
+  // With no lateness in play, jitter 0 leaves the order untouched either way --
+  // so any difference below is entirely about who is late, not about ordering.
+  expect(order({ nonComplianceRate: 0.0, lateRate: 0.0 })).toEqual(
+    order({ nonComplianceRate: 0.15, lateRate: 0.0 }),
+  )
+  expect(order({ nonComplianceRate: 0.0, lateRate: 0.3 })).not.toEqual(
+    order({ nonComplianceRate: 0.15, lateRate: 0.3 }),
+  )
+})
+
 it('rejects an unknown strategy clearly', () => {
   expect(() => simulate(cfgFor('a320neo', 'random', 1).replace({ strategy: 'teleport' }))).toThrow(
     ConfigError,
