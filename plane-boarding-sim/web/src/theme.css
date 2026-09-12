@@ -1,0 +1,165 @@
+/* Boarding Lab design tokens.
+   Light is the base palette; dark overrides only the tokens that change.
+   Every colour used anywhere in the app comes from here. */
+
+:root {
+  color-scheme: light dark;
+
+  /* surfaces */
+  --bg:            #f4f6f9;
+  --surface:       #ffffff;
+  --surface-2:     #eef1f6;
+  --surface-3:     #e3e8f0;
+  --border:        #d3dae5;
+  --border-strong: #b6c0d0;
+
+  /* text */
+  --text:          #10151f;
+  --text-2:        #4a5568;
+  --text-3:        #7a869a;
+  --text-inv:      #ffffff;
+
+  /* brand / accent */
+  --accent:        #2563eb;
+  --accent-hover:  #1d4ed8;
+  --accent-soft:   #dbe6ff;
+  --focus:         #2563eb;
+
+  /* passenger states — also distinguished by shape, so these are safe
+     for colour-vision deficiency, but they are chosen to be distinguishable
+     under deuteranopia anyway */
+  --state-waiting:  #e0364f;   /* red    — queued or blocked */
+  --state-walking:  #3b82f6;   /* blue   — moving down the aisle */
+  --state-stowing:  #f59e0b;   /* amber  — stowing / shuffling */
+  --state-seated:   #16a34a;   /* green  — seated */
+
+  /* cabin classes */
+  --class-first:    #7c3aed;
+  --class-business: #0891b2;
+  --class-premium:  #0d9488;
+  --class-economy:  #94a3b8;
+
+  /* categorical series for charts (colour-blind-safe, ordered by salience) */
+  --series-1:  #2563eb;
+  --series-2:  #ea580c;
+  --series-3:  #16a34a;
+  --series-4:  #9333ea;
+  --series-5:  #dc2626;
+  --series-6:  #0891b2;
+  --series-7:  #ca8a04;
+  --series-8:  #db2777;
+  --series-9:  #4d7c0f;
+  --series-10: #7c3aed;
+  --series-11: #b45309;
+  --series-12: #0f766e;
+
+  /* sequential ramp for heatmaps (light → hot) */
+  --heat-0: #eef2ff;
+  --heat-1: #c7d7fe;
+  --heat-2: #93b4fd;
+  --heat-3: #fbbf24;
+  --heat-4: #f97316;
+  --heat-5: #dc2626;
+
+  /* semantic */
+  --good:  #16a34a;
+  --warn:  #d97706;
+  --bad:   #dc2626;
+
+  /* geometry */
+  --radius:    8px;
+  --radius-sm: 5px;
+  --radius-lg: 14px;
+  --shadow:    0 1px 2px rgba(16, 21, 31, .06), 0 4px 12px rgba(16, 21, 31, .06);
+  --shadow-lg: 0 8px 32px rgba(16, 21, 31, .14);
+
+  /* type */
+  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+:root[data-theme='dark'] {
+  --bg:            #0b0f16;
+  --surface:       #131924;
+  --surface-2:     #1a2231;
+  --surface-3:     #232d3f;
+  --border:        #283345;
+  --border-strong: #3a4759;
+
+  --text:          #e8edf5;
+  --text-2:        #9fb0c7;
+  --text-3:        #6b7d95;
+  --text-inv:      #0b0f16;
+
+  --accent:        #60a5fa;
+  --accent-hover:  #93c5fd;
+  --accent-soft:   #1e3a5f;
+  --focus:         #60a5fa;
+
+  --state-waiting:  #ff5470;
+  --state-walking:  #60a5fa;
+  --state-stowing:  #fbbf24;
+  --state-seated:   #34d399;
+
+  --class-first:    #a78bfa;
+  --class-business: #22d3ee;
+  --class-premium:  #2dd4bf;
+  --class-economy:  #64748b;
+
+  --series-1:  #60a5fa;
+  --series-2:  #fb923c;
+  --series-3:  #34d399;
+  --series-4:  #c084fc;
+  --series-5:  #f87171;
+  --series-6:  #22d3ee;
+  --series-7:  #fbbf24;
+  --series-8:  #f472b6;
+  --series-9:  #a3e635;
+  --series-10: #a78bfa;
+  --series-11: #fdba74;
+  --series-12: #5eead4;
+
+  --heat-0: #131924;
+  --heat-1: #1e3a5f;
+  --heat-2: #2563eb;
+  --heat-3: #ca8a04;
+  --heat-4: #ea580c;
+  --heat-5: #ef4444;
+
+  --good:  #34d399;
+  --warn:  #fbbf24;
+  --bad:   #f87171;
+
+  --shadow:    0 1px 2px rgba(0, 0, 0, .4), 0 4px 12px rgba(0, 0, 0, .3);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, .5);
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Live figures must not jitter as digits change. */
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    transition-duration: .01ms !important;
+  }
+}
