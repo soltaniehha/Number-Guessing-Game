@@ -86,6 +86,52 @@ class PCG32:
         sigma = math.sqrt(math.log(1.0 + var / (mean * mean)))
         return math.exp(self.normal(mu, sigma))
 
+    def exponential(self, mean: float) -> float:
+        """Inverse-CDF exponential. Exactly ONE uint32 draw.
+
+        Used for the door arrival process: Schultz's field data show passenger
+        inter-arrival at the aircraft door is memoryless, which is what makes
+        the door such a stubborn serialising constraint.
+        """
+        if mean <= 0:
+            return 0.0
+        u = 1.0 - self.random()
+        if u < 1e-12:
+            u = 1e-12
+        return -mean * math.log(u)
+
+    def weibull(self, shape: float, scale: float) -> float:
+        """Inverse-CDF Weibull. Exactly ONE uint32 draw.
+
+        Schultz fits Weibull(k=1.7, lambda=16 s) to the time to stow ONE piece
+        of luggage. The right-skew is the point: most stows are quick, a small
+        tail of them are disasters, and it is the tail that jams the aisle.
+        """
+        if shape <= 0 or scale <= 0:
+            return 0.0
+        u = 1.0 - self.random()
+        if u < 1e-12:
+            u = 1e-12
+        return scale * math.pow(-math.log(u), 1.0 / shape)
+
+    def triangular(self, lo: float, mode: float, hi: float) -> float:
+        """Inverse-CDF triangular. Exactly ONE uint32 draw.
+
+        The elementary-movement primitive: one "step out / stand / sit" action
+        costs Triangular(1.8, 2.4, 3.0) s. Seat interference is then modelled as
+        an integer NUMBER of these movements rather than a fitted total, which
+        is what lets the model distinguish "aisle blocks middle" from
+        "aisle+middle block window".
+        """
+        span = hi - lo
+        if span <= 0:
+            return lo
+        u = self.random()
+        c = (mode - lo) / span
+        if u < c:
+            return lo + math.sqrt(u * span * (mode - lo))
+        return hi - math.sqrt((1.0 - u) * span * (hi - mode))
+
     def bernoulli(self, p: float) -> bool:
         return self.random() < p
 

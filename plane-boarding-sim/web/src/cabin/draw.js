@@ -17,7 +17,7 @@ import {
   stateToken,
   withAlpha,
 } from './tokens.js'
-import { fuselageHalfWidth } from './geometry.js'
+import { SEAT_UNIT_M, fuselageHalfWidth } from './geometry.js'
 import { STATE, compressQueue } from './playback.js'
 
 const LABEL_FONT = '600 %spx ui-monospace, "SF Mono", Menlo, Consolas, monospace'
@@ -308,7 +308,7 @@ function drawSeatLetters(ctx, geom, tokens) {
     if (!lateral) continue
     const u = cabinForeU(geom, cabin.id) - size * 1.2
     for (const [letter, units] of lateral) {
-      const v = units * 0.46 * geom.scaleLat
+      const v = units * SEAT_UNIT_M * geom.scaleLat
       ctx.fillText(letter, sx(geom, u, v), sy(geom, u, v))
     }
   }
@@ -362,6 +362,7 @@ export function makeScratch(paxCount, rowCount, laneCount, doorCount) {
  * @param {Float32Array|number[]} frame.x        interpolated metres per pax
  * @param {Int8Array|number[]} frame.state       state per pax
  * @param {Float32Array|number[]|null} frame.trailX  position TRAIL_SECONDS ago
+ * @param {Int32Array} frame.seatIndex           geometry seat index per pax
  * @param {boolean} frame.showQueue
  * @param {boolean} frame.showHeat
  * @param {number} frame.hoveredId               -1 for none
@@ -411,7 +412,8 @@ function accumulateHeat(geom, frame, scratch, n) {
     // avoids building any index per frame.
     for (let r = 0; r < rows.length; r++) {
       const row = rows[r]
-      if (Math.abs(xM - row.xM) <= row.halfPitchM) {
+      if (xM < row.xM - row.halfPitchM) break // rows ascend in x
+      if (xM <= row.xM + row.halfPitchM) {
         scratch.heat[r * lanes + lane]++
         break
       }
@@ -495,7 +497,7 @@ function paintPassengers(ctx, geom, tokens, frame, scratch, n) {
     let u
     let v
     if (s === STATE.SEATED) {
-      const seatIdx = pax[i].seatIndex
+      const seatIdx = frame.seatIndex[i]
       u = geom.seatU[seatIdx]
       v = geom.seatV[seatIdx]
     } else {
@@ -606,7 +608,7 @@ function paintQueueBadges(ctx, geom, tokens, scratch) {
     const door = geom.doors[d]
     const count = scratch.queueCount[d]
     if (!count) continue
-    const label = door._queueHidden > 0 ? `${count}` : `${count}`
+    const label = String(count)
     const u = door.u - size * 1.9
     const x = sx(geom, u, door.laneV)
     const y = sy(geom, u, door.laneV)

@@ -90,6 +90,52 @@ export class PCG32 {
     return Math.exp(this.normal(mu, sigma))
   }
 
+  /**
+   * Inverse-CDF exponential. Exactly ONE uint32 draw.
+   *
+   * Used for the door arrival process: Schultz's field data show passenger
+   * inter-arrival at the aircraft door is memoryless, which is what makes the
+   * door such a stubborn serialising constraint.
+   */
+  exponential(mean) {
+    if (mean <= 0) return 0
+    let u = 1 - this.random()
+    if (u < 1e-12) u = 1e-12
+    return -mean * Math.log(u)
+  }
+
+  /**
+   * Inverse-CDF Weibull. Exactly ONE uint32 draw.
+   *
+   * Schultz fits Weibull(k=1.7, lambda=16 s) to the time to stow ONE piece of
+   * luggage. The right-skew is the point: most stows are quick, a small tail of
+   * them are disasters, and it is the tail that jams the aisle.
+   */
+  weibull(shape, scale) {
+    if (shape <= 0 || scale <= 0) return 0
+    let u = 1 - this.random()
+    if (u < 1e-12) u = 1e-12
+    return scale * Math.pow(-Math.log(u), 1 / shape)
+  }
+
+  /**
+   * Inverse-CDF triangular. Exactly ONE uint32 draw.
+   *
+   * The elementary-movement primitive: one "step out / stand / sit" action
+   * costs Triangular(1.8, 2.4, 3.0) s. Seat interference is then modelled as an
+   * integer NUMBER of these movements rather than a fitted total, which is what
+   * lets the model distinguish "aisle blocks middle" from "aisle+middle block
+   * window".
+   */
+  triangular(lo, mode, hi) {
+    const span = hi - lo
+    if (span <= 0) return lo
+    const u = this.random()
+    const c = (mode - lo) / span
+    if (u < c) return lo + Math.sqrt(u * span * (mode - lo))
+    return hi - Math.sqrt((1 - u) * span * (hi - mode))
+  }
+
   bernoulli(p) {
     return this.random() < p
   }

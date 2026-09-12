@@ -252,6 +252,7 @@ export function computeGeometry(aircraft, opts) {
   const seatH = new Float32Array(count)
   const seatClass = new Array(count)
   const seatIndexById = new Map()
+  const seatIndexByRowLetter = new Map()
 
   const cabinBysId = new Map()
   for (const cabin of aircraft.cabins || []) cabinBysId.set(cabin.id, cabin)
@@ -269,6 +270,7 @@ export function computeGeometry(aircraft, opts) {
     seatH[i] = seatHeight
     seatClass[i] = cabin ? cabin.classKey : 'economy'
     seatIndexById.set(seat.id, i)
+    seatIndexByRowLetter.set(`${seat.rowNumber}:${seat.letter}`, i)
   }
 
   // --- aisle lanes ------------------------------------------------------
@@ -328,6 +330,7 @@ export function computeGeometry(aircraft, opts) {
     seatH,
     seatClass,
     seatIndexById,
+    seatIndexByRowLetter,
     seatHeight,
     minPitchPx,
     laneV,
@@ -401,4 +404,22 @@ export function fuselageHalfWidth(geom, u) {
     return halfV * (1 - 0.9 * k * k)
   }
   return halfV
+}
+
+/**
+ * Map every passenger onto a seat index in `geom`, so the draw loop can look
+ * up a seated dot's position with one array read.
+ *
+ * @returns {Int32Array} `seatIndex[paxId]`, or 0 when the seat is unknown
+ *          (open seating before the passenger has chosen).
+ */
+export function mapPassengersToSeats(geom, passengers) {
+  const out = new Int32Array(passengers.length)
+  for (let i = 0; i < passengers.length; i++) {
+    const p = passengers[i]
+    const key = `${p.seatRow}:${p.seatLetter}`
+    const idx = geom.seatIndexByRowLetter.get(key)
+    out[i] = idx === undefined ? 0 : idx
+  }
+  return out
 }
