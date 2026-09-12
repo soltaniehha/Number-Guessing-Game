@@ -16,7 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from .aircraft import aircraft_ids, geometry_payload, get_aircraft
 from .batch import compare_strategies, load_sweep, run_batch
@@ -41,6 +41,40 @@ def _bar(value: float, vmax: float, width: int = 26) -> str:
         return ""
     filled = max(1, int(round(width * value / vmax)))
     return BAR_CHARS * filled + LIGHT * (width - filled)
+
+
+def shared_ranks(means: Sequence[float], halfwidths: Sequence[float]) -> List[int]:
+    """Competition ranks for a fastest-first list, with statistical ties sharing
+    a rank.
+
+    Two strategies whose 95% confidence intervals overlap are not distinguished
+    by the data, and presenting one above the other invites the reader to act on
+    noise -- which is the easiest way for this tool to mislead somebody. So a
+    run of entries whose intervals all overlap the *leader's* interval shares
+    the leader's rank, and the next distinct group resumes at its own position
+    (1, =2, =2, 4, ...).
+
+    Overlap is tested against the group leader rather than the previous entry on
+    purpose: chaining "overlaps its neighbour" is not transitive and would
+    happily merge an entire table into one tie.
+
+    Note the comparison uses common random numbers, so the marginal intervals
+    are a conservative test -- a paired difference is tighter than these
+    suggest, so this will call some genuinely separated pairs a tie. That is the
+    safe direction to err.
+    """
+    ranks: List[int] = []
+    leader = 0
+    for i, (m, h) in enumerate(zip(means, halfwidths)):
+        if i == 0:
+            ranks.append(1)
+            continue
+        if m - h <= means[leader] + halfwidths[leader]:
+            ranks.append(ranks[leader])          # ties with the group leader
+        else:
+            leader = i
+            ranks.append(i + 1)
+    return ranks
 
 
 def _make_config(args: argparse.Namespace, strategy: Optional[str] = None) -> SimConfig:
@@ -163,24 +197,39 @@ def cmd_compare(args: argparse.Namespace) -> int:
           "(common random numbers, so the comparison is paired)")
     print("=" * 100)
     multi_door = len(cfg.doors or ac.default_doors()) > 1
+    ranks = shared_ranks([b.mean for b in results],
+                         [b.totalSeconds.ci95 for b in results])
+    tied = {r for r in ranks if ranks.count(r) > 1}
     idle_col = f" {'far-first':>9s}"
-    hdr = (f" {'#':>2}  {'strategy':<20s} {'mean':>7s} {'+/-95%':>7s} "
+    hdr = (f" {'#':>3}  {'strategy':<20s} {'mean':>7s} {'+/-95%':>7s} "
            f"{'sd':>6s} {'p05':>6s} {'p95':>6s} {'vs rnd':>7s}{idle_col}  relative time")
     print(hdr)
     print("-" * 100)
-    for i, b in enumerate(results, 1):
+    for b, rank in zip(results, ranks):
         ratio = b.mean / baseline.mean if baseline.mean else 0.0
         idle = f" {b.sequencing.mean:+9.2f}"
-        print(f" {i:2d}  {b.strategy:<20s} {_fmt_mmss(b.mean):>7s} "
+        label = f"={rank}" if rank in tied else str(rank)
+        print(f" {label:>3s}  {b.strategy:<20s} {_fmt_mmss(b.mean):>7s} "
               f"{b.totalSeconds.ci95:7.1f} {b.totalSeconds.sd:6.1f} "
               f"{_fmt_mmss(b.totalSeconds.p05):>6s} {_fmt_mmss(b.totalSeconds.p95):>6s} "
               f"{ratio:7.3f}{idle}  {_bar(b.mean, worst, 24)}")
     print("-" * 100)
+    if tied:
+        print(" '=' marks a SHARED rank: those strategies' 95% confidence intervals"
+              " overlap, so this many")
+        print(" replications cannot tell them apart. Treat them as equal, not as"
+              " ordered.")
     best = results[0]
     saving = baseline.mean - best.mean
-    print(f" best: {STRATEGIES[best.strategy]['name']}  —  "
-          f"{_fmt_mmss(saving)} faster than free-for-all "
-          f"({100 * saving / baseline.mean:.1f}%)")
+    joint = [b.strategy for b, r in zip(results, ranks) if r == ranks[0]]
+    if len(joint) > 1:
+        print(f" best: {len(joint)} strategies tie for first ({', '.join(joint)})"
+              f"  —  about {_fmt_mmss(saving)} faster than free-for-all "
+              f"({100 * saving / baseline.mean:.1f}%)")
+    else:
+        print(f" best: {STRATEGIES[best.strategy]['name']}  —  "
+              f"{_fmt_mmss(saving)} faster than free-for-all "
+              f"({100 * saving / baseline.mean:.1f}%)")
     print(" seat interference (mean events/run):  "
           + "   ".join(f"{b.strategy}={b.interference['one'] + b.interference['two']:.0f}"
                        for b in results[:4]))

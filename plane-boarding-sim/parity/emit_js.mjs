@@ -321,4 +321,10 @@ function main(argv) {
   return 0
 }
 
-process.exitCode = main(process.argv.slice(2))
+// `if __name__ == "__main__"` -- so the helpers above can be imported by tests
+// without the CLI running.
+if (process.argv[1] && process.argv[1].endsWith('emit_js.mjs')) {
+  process.exitCode = main(process.argv.slice(2))
+}
+
+export { main, parseJsonRaw, plain }

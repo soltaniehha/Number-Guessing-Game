@@ -108,3 +108,31 @@ describe('theme.css owns its own color-scheme', () => {
     expect(darkBlock.slice(0, 200)).toMatch(/color-scheme:\s*dark;/)
   })
 })
+
+describe('--border-strong clears WCAG 1.4.11 for interactive boundaries', () => {
+  // 1.4.11 asks 3:1 of the visual boundary that identifies a control. The
+  // token is used on all three surfaces plus the tinted open-door row, and it
+  // measured 1.84 / 1.62 / 1.49 light and 1.87 / 1.69 / 1.47 dark.
+  const UI = 3
+
+  for (const [theme, tokens] of [['light', LIGHT], ['dark', DARK]]) {
+    for (const surface of ['--surface', '--surface-2', '--surface-3']) {
+      it(`${theme}: on ${surface}`, () => {
+        const ratio = contrastRatio(tokens['--border-strong'], tokens[surface])
+        expect(ratio, `${theme} --border-strong on ${surface} is ${ratio?.toFixed(2)}:1`)
+          .toBeGreaterThanOrEqual(UI)
+      })
+    }
+
+    it(`${theme}: on the tinted open-door row`, () => {
+      const row = mix(tokens['--good'], tokens['--surface-2'], 0.08)
+      expect(contrastRatio(tokens['--border-strong'], row)).toBeGreaterThanOrEqual(UI)
+    })
+
+    it(`${theme}: --border stays the quiet divider it is meant to be`, () => {
+      // Not a failure — dividers are decoration, and 1.4.11 does not apply.
+      // Asserted so nobody "fixes" it into a heavy rule.
+      expect(contrastRatio(tokens['--border'], tokens['--surface'])).toBeLessThan(2)
+    })
+  }
+})

@@ -16,7 +16,16 @@
   --surface-2:     #eef1f6;
   --surface-3:     #e3e8f0;
   --border:        #d3dae5;
-  --border-strong: #b6c0d0;
+  /* --border is the divider: hairlines, table rules, card edges. It is meant
+     to be quiet and stays quiet.
+     --border-strong is the boundary of an INTERACTIVE component — buttons,
+     selects, chips, door rows, presets — so WCAG 1.4.11 asks 3:1 of it
+     against whatever surface the control sits on. At #b6c0d0 it measured
+     1.84 / 1.62 / 1.49 on --surface / --surface-2 / --surface-3 and controls
+     read as flat panels. Now 3.95 / 3.49 / 3.21, and 3.22 on the tinted
+     open-door row. It is also the chart axis rule and the fuselage outline,
+     which is why it is only as dark as the 3:1 floor needs. */
+  --border-strong: #6d81a2;
 
   /* text
      --text-3 is the one-line explanation / axis-tick ink. It lands on
@@ -105,7 +114,9 @@
   --surface-2:     #1a2231;
   --surface-3:     #232d3f;
   --border:        #283345;
-  --border-strong: #3a4759;
+  /* 4.07 / 3.68 / 3.20 on --surface / --surface-2 / --surface-3, 3.17 on the
+     tinted open-door row (was 1.87 / 1.69 / 1.47). */
+  --border-strong: #657b9a;
 
   --text:          #e8edf5;
   --text-2:        #9fb0c7;
