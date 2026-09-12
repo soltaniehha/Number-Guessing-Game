@@ -9,7 +9,7 @@
  *   PlaybackContext — the transport controls, whose identity is stable.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { makeConfigReducer, sanitizeConfig } from './configReducer.js'
+import { deepEqual, makeConfigReducer, sanitizeConfig } from './configReducer.js'
 import { buildDefaultConfig } from './configDefaults.js'
 import { readHashConfig, syncHash } from '../lib/urlConfig.js'
 import { PRESET_BY_ID } from '../app/presets.js'
@@ -90,6 +90,7 @@ export function StoreProvider({ engine, children }) {
   const [modal, setModal] = useState(null)
 
   const [replay, setReplay] = useState(null)
+  const [replayConfig, setReplayConfig] = useState(null)
   const [runError, setRunError] = useState(null)
   const [busy, setBusy] = useState(false)
   const [batch, setBatch] = useState({ running: false, done: 0, total: 0, result: null, error: null })
@@ -167,7 +168,8 @@ export function StoreProvider({ engine, children }) {
     setTimeout(() => {
       try {
         const next = engine.runReplay(config)
-        setReplay(next && next.result ? next : { result: next, duration: next?.totalSeconds ?? 0, frames: [], dt: 0.5 })
+        setReplay(next && next.result ? next : { result: next, duration: next?.totalSeconds ?? 0 })
+        setReplayConfig(config)
       } catch (err) {
         setRunError(err?.message || String(err))
         setReplay(null)
@@ -187,6 +189,7 @@ export function StoreProvider({ engine, children }) {
         config,
         strategies: list,
         runs: config.runs,
+        names: engine.STRATEGIES,
         onProgress: ({ done, total, partial }) => setBatch((b) => ({ ...b, done, total, result: partial ?? b.result })),
         onDone: (result) => {
           setBatch({ running: false, done: result?.done ?? result?.total ?? 0, total: result?.total ?? 0, result, error: null })
@@ -240,6 +243,8 @@ export function StoreProvider({ engine, children }) {
       modal,
       setModal,
       replay,
+      // True once the config has moved on from the run currently on screen.
+      replayStale: Boolean(replay && replayConfig && !deepEqual(replayConfig, config)),
       runError,
       busy,
       run,
@@ -250,7 +255,7 @@ export function StoreProvider({ engine, children }) {
     [
       engine, defaults, config, aircraft, strategy, setField, toggleDoor, loadConfig, applyPreset, reset,
       randomiseSeed, mode, theme, toggleTheme, drawerOpen, openSections, toggleSection, toast, modal,
-      replay, runError, busy, run, batch, runBatch, stopBatch,
+      replay, replayConfig, runError, busy, run, batch, runBatch, stopBatch,
     ],
   )
 

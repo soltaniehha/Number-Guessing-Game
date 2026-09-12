@@ -1,0 +1,351 @@
+/* Boarding Lab — analytics charts.
+   Every colour here resolves to a token from theme.css, so a theme flip is a
+   pure CSS re-resolve: no JS reads, no repaint pass, no stale hexes. */
+
+/* ---------- chart frame ------------------------------------------------ */
+
+.ch-frame {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ch-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ch-head-text { min-width: 0; }
+
+.ch-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .01em;
+  color: var(--text);
+}
+
+.ch-sub {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--text-3);
+}
+
+.ch-tablebtn {
+  flex: none;
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.ch-tablebtn:hover { background: var(--surface-3); color: var(--text); }
+.ch-tablebtn[aria-pressed='true'] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.ch-body { position: relative; min-width: 0; }
+
+.ch-svg { display: block; overflow: visible; }
+
+.ch-foot {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-3);
+}
+
+/* Streaming: values move, nothing replays. Geometry interpolates; there are
+   no enter animations anywhere, and React keys are stable, so a partial
+   update slides marks to their new size instead of re-drawing the chart. */
+.ch-animate {
+  transition:
+    x .32s cubic-bezier(.4, 0, .2, 1),
+    y .32s cubic-bezier(.4, 0, .2, 1),
+    width .32s cubic-bezier(.4, 0, .2, 1),
+    height .32s cubic-bezier(.4, 0, .2, 1),
+    cx .32s cubic-bezier(.4, 0, .2, 1),
+    cy .32s cubic-bezier(.4, 0, .2, 1),
+    r .32s cubic-bezier(.4, 0, .2, 1),
+    transform .32s cubic-bezier(.4, 0, .2, 1),
+    opacity .2s linear;
+}
+
+/* ---------- empty state ------------------------------------------------ */
+
+.ch-empty {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  padding: 20px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.ch-empty-title {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.ch-empty-hint {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+  max-width: 52ch;
+}
+
+/* ---------- legend ----------------------------------------------------- */
+
+.ch-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.ch-legend.is-dense { gap: 2px 10px; font-size: 11px; }
+
+.ch-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.ch-legend-item.is-button {
+  font: inherit;
+  color: inherit;
+  border: 1px solid transparent;
+  background: none;
+  padding: 3px 7px;
+  border-radius: 999px;
+  cursor: pointer;
+  min-height: 26px;
+}
+.ch-legend-item.is-button:hover { background: var(--surface-2); border-color: var(--border); }
+.ch-legend-item.is-off { color: var(--text-3); text-decoration: line-through; opacity: .75; }
+
+.ch-legend-swatch { flex: none; display: block; }
+
+.ch-heatlegend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.ch-heatlegend-title { color: var(--text-2); }
+.ch-heatlegend-steps { display: flex; align-items: flex-end; gap: 0; }
+.ch-heatlegend-step { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.ch-heatlegend-chip {
+  display: block;
+  width: 26px;
+  height: 10px;
+  border-radius: 2px;
+  /* the 2px separator is surface, never a stroke around the mark */
+  margin-right: 2px;
+}
+.ch-heatlegend-tick { font-size: 10px; }
+
+/* ---------- tooltip ---------------------------------------------------- */
+
+.ch-tip {
+  position: absolute;
+  z-index: 6;
+  pointer-events: none;
+  min-width: 128px;
+  max-width: 260px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.ch-tip-title { font-weight: 600; color: var(--text); margin-bottom: 1px; }
+.ch-tip-sub { color: var(--text-3); font-size: 11px; margin-bottom: 5px; }
+.ch-tip-note { color: var(--text-3); font-size: 10.5px; margin-top: 5px; line-height: 1.4; }
+
+.ch-tip-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.ch-tip-rows li {
+  display: grid;
+  grid-template-columns: 14px auto 1fr;
+  align-items: center;
+  gap: 6px;
+}
+.ch-tip-rows li.is-strong .ch-tip-value { color: var(--text); font-weight: 600; }
+.ch-tip-key { display: block; }
+.ch-tip-nokey { display: block; width: 14px; }
+/* value leads, label follows — the legend's hierarchy inverted */
+.ch-tip-value { color: var(--text); font-weight: 600; }
+.ch-tip-label { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- table view ------------------------------------------------- */
+
+.ch-table-wrap { overflow-x: auto; max-height: 420px; overflow-y: auto; }
+
+.ch-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+.ch-table caption {
+  caption-side: top;
+  text-align: left;
+  color: var(--text-3);
+  font-size: 11px;
+  padding-bottom: 6px;
+}
+.ch-table th,
+.ch-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.ch-table th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  color: var(--text-2);
+  font-weight: 600;
+  text-align: left;
+}
+.ch-table td { color: var(--text-2); }
+.ch-table tbody tr:hover td { background: var(--surface-2); }
+.ch-table-empty { color: var(--text-3); text-align: center; padding: 18px; }
+
+/* ---------- interaction affordances ------------------------------------ */
+
+.ch-hit { fill: transparent; cursor: default; outline: none; }
+.ch-hit:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.ch-mark-dim { opacity: .38; }
+.ch-mark-hot { filter: brightness(1.08); }
+
+/* ---------- grid & cards ----------------------------------------------- */
+
+.cg-root {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+  min-width: 0;
+}
+
+/* dataviz: ONE filter row, above everything it scopes. Never per-chart. */
+.cg-filterbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.cg-filterbar-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.cg-filterbar-actions { display: flex; gap: 6px; margin-left: auto; }
+
+.cg-btn {
+  font: inherit;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
+  cursor: pointer;
+  min-height: 26px;
+}
+.cg-btn:hover { background: var(--surface-3); color: var(--text); }
+
+.cg-status {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.cg-status strong { color: var(--text-2); font-weight: 600; }
+
+.cg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 14px;
+  min-width: 0;
+}
+
+.cg-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  min-width: 0;
+}
+.cg-card.is-wide { grid-column: 1 / -1; }
+
+.cg-card-note {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-2);
+  border-left: 2px solid var(--border-strong);
+  padding-left: 8px;
+}
+
+.cg-card-tools {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: -4px;
+}
+
+.cg-refetching { opacity: .55; }
+
+@media (max-width: 520px) {
+  .cg-root { padding: 10px; gap: 10px; }
+  .cg-grid { grid-template-columns: 1fr; gap: 10px; }
+  .cg-card { padding: 10px; border-radius: var(--radius); }
+  .cg-filterbar { position: static; }
+}
+
+/* In-fill labels pick ink or paper by the fill's luminance (dataviz: the one
+   place text may sit on a data colour). Light theme: paper on the saturated
+   fills, ink on amber. Dark theme: every series step is bright, so ink wins
+   everywhere — and --text-inv is already the dark ink there. */
+.ch-seg-label { fill: var(--text-inv); font-size: 11px; font-weight: 600; }
+.ch-seg-label.is-stow { fill: var(--text); }
+:root[data-theme='dark'] .ch-seg-label,
+:root[data-theme='dark'] .ch-seg-label.is-stow { fill: var(--text-inv); }

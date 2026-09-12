@@ -1,14 +1,17 @@
 {
-  "_comment": "Single source of truth for simulation defaults. BOTH the Python and JS engines load this exact file, so the two can never drift on parameter values. Values are calibrated against the boarding-simulation literature; see docs/RESEARCH.md for provenance.",
+  "_comment": "Single source of truth for simulation defaults. BOTH the Python and JS engines load this exact file, so the two can never drift on parameter values. Every number is traceable to docs/RESEARCH_PARAMETERS.md; the service-time models follow Schultz (DLR), the best field-calibrated boarding model in the literature (>400 recorded flights, 282 A320/737 boarding events, validation deviation <5%).",
 
   "loadFactor": 0.92,
   "doorAssignment": "split_by_row",
 
-  "bagWeights":       { "0": 0.20, "1": 0.62, "2": 0.18 },
+  "_bagWeights_comment": "OVERHEAD-BIN-BOUND pieces per passenger. A personal item that goes under the seat is NOT a piece: it neither occupies a bin slot nor holds up the aisle. Schultz's calibrated set is {1:0.60, 2:0.30, 3:0.10} = 1.5 pieces/pax, i.e. everybody carries at least one. We keep the mean inside the plausible 1.0-1.5 band but allow a modest zero-bag share, because fares that forbid a cabin bag are now common. This is the single designated free parameter for hitting the absolute calibration target in docs/RESEARCH_PARAMETERS.md 11.1; everything else in the service-time model is pinned to the literature.",
+  "bagWeights":       { "0": 0.20, "1": 0.60, "2": 0.20 },
+  "_partySizeWeights_comment": "ASSUMPTION, not a citation. Constructed from Schultz's 73%-alone (business) / 19%-alone (leisure) split as a mixed-traffic compromise. See RESEARCH_PARAMETERS 6 and 12.2.",
   "partySizeWeights": { "1": 0.52, "2": 0.30, "3": 0.10, "4": 0.06, "5": 0.02 },
 
-  "walkSpeedMean": 0.90,
-  "walkSpeedSd": 0.18,
+  "_walkSpeed_comment": "Schultz uses a DETERMINISTIC 0.80 m/s for every agent. We sample per passenger because the product exposes mean and sd as user controls; set walkSpeedSd = 0 to reduce exactly to his configuration (see the schultz_reference fixture). Deliberate deviation, recorded in RESEARCH_PARAMETERS 12.1.",
+  "walkSpeedMean": 0.80,
+  "walkSpeedSd": 0.15,
 
   "preboardRate": 0.025,
   "slowPaxRate": 0.05,
@@ -18,19 +21,23 @@
 
   "eliteMix": { "elite_top": 0.05, "elite_mid": 0.10, "cardholder": 0.15, "standard": 0.55, "basic": 0.15 },
 
-  "stowBaseMean": 12.5,
-  "stowCv": 0.45,
-  "stowBagExponent": 0.85,
+  "_stow_comment": "Weibull(shape 1.7, scale 16.0 s) PER PIECE of luggage: mean 14.3 s, sd 8.6 s, measured field mean 13.9 s (Schultz 2018, Aerospace 5(1):27). Total stow time is the SUM of one independent draw per piece, so the variance grows super-linearly with bag count for free -- no exponent hack needed.",
+  "stowWeibullShape": 1.7,
+  "stowWeibullScale": 16.0,
   "stowVariability": 0.28,
 
-  "shuffleTime": { "1": 9.0, "2": 15.0 },
-  "shuffleCv": 0.35,
-  "shuffleSamePartyTime": 2.5,
+  "_shuffle_comment": "Elementary-movement model. One movement (stand / step out / step back / sit) costs Triangular(1.8, 2.4, 3.0) s, mean 2.4 s. The number of movements depends on WHICH seats block, not merely how many. Note 'none' = 1: every passenger pays ~2.4 s simply to sit down, which is a real and non-trivial part of the total.",
+  "shuffleMoveMin": 1.8,
+  "shuffleMoveMode": 2.4,
+  "shuffleMoveMax": 3.0,
+  "shuffleMovements": { "none": 1, "aisle": 4, "middle": 5, "both": 9 },
+  "shuffleSamePartyMovements": 2,
 
-  "gateScanMean": 2.2,
-  "gateScanSd": 1.1,
+  "_door_comment": "Measured inter-arrival of passengers at the aircraft door, exponential with mean 3.7 s (Schultz). This is a major serialising constraint: on a 186-seat single-door boarding it alone accounts for ~11.5 minutes.",
+  "doorArrivalMean": 3.7,
 
-  "binBagsPerRowSide": 4,
+  "_bin_comment": "binBagsPerRowSide lives on the AIRCRAFT (bin volume is an airframe property and varies enormously -- 1 bag/row-side on a legacy E175, 4 on an A320neo with Airspace XL bins). Set it here only to override the airframe. Search/gate-check penalties are extrapolation, not literature: no peer-reviewed source publishes a gate-check time penalty (RESEARCH_PARAMETERS 7, 12.2).",
+  "binBagsPerRowSide": null,
   "binSearchRadius": 3,
   "binSearchPenalty": 3.5,
   "gateCheckPenalty": 22.0,
@@ -39,7 +46,8 @@
   "zoneCount": 4,
   "keepPartiesTogether": true,
   "preboardFirst": true,
-  "nonComplianceRate": 0.08,
+  "_nonCompliance_comment": "Schultz's measured conformance rate is 85%, so 15% of passengers ignore the group they were called in.",
+  "nonComplianceRate": 0.15,
   "complianceJitter": 6,
   "lateRate": 0.01,
   "openSeatingPolicy": "aisle_first",

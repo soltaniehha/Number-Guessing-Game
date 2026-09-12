@@ -206,6 +206,32 @@ export const CONTROLS = [
   },
 
   // ------------------------------------------------------------------ timing
+  // Two parameterisations of the service-time model exist: the one written up
+  // in ENGINE_SPEC section 8 and the Schultz calibration that parity/defaults.json
+  // has since moved to. Both are described here and the panel shows whichever
+  // the live engine actually exposes (see `presentControls` below).
+  {
+    key: 'stowWeibullScale',
+    kind: 'slider',
+    section: 'timing',
+    label: 'Stow time per bag',
+    min: 6,
+    max: 34,
+    step: 0.5,
+    format: secs,
+    explain: 'How long a typical passenger takes to heave one bag into the bin. Each extra piece is a fresh, independent struggle.',
+  },
+  {
+    key: 'stowWeibullShape',
+    kind: 'slider',
+    section: 'timing',
+    label: 'Stow time consistency',
+    min: 1,
+    max: 3.5,
+    step: 0.05,
+    format: fixed2,
+    explain: 'Higher means stow times cluster tightly; lower means a long tail of people who really cannot get it up there.',
+  },
   {
     key: 'stowBaseMean',
     kind: 'slider',
@@ -248,7 +274,97 @@ export const CONTROLS = [
     max: 0.8,
     step: 0.01,
     format: fixed2,
-    explain: 'How much people differ from each other in handling luggage — some are simply quicker every time.',
+    explain: 'How much people differ from each other in handling luggage \u2014 some are simply quicker every time.',
+  },
+  {
+    key: 'shuffleMoveMode',
+    kind: 'slider',
+    section: 'timing',
+    label: 'One movement (typical)',
+    min: 1,
+    max: 6,
+    step: 0.1,
+    format: secs,
+    explain: 'One elementary movement: standing up, stepping into the aisle, stepping back, or sitting down.',
+  },
+  {
+    key: 'shuffleMoveMin',
+    kind: 'slider',
+    section: 'timing',
+    label: 'One movement (fastest)',
+    min: 0.5,
+    max: 4,
+    step: 0.1,
+    format: secs,
+    advanced: true,
+    explain: 'The quickest anyone manages a single movement.',
+  },
+  {
+    key: 'shuffleMoveMax',
+    kind: 'slider',
+    section: 'timing',
+    label: 'One movement (slowest)',
+    min: 1.5,
+    max: 9,
+    step: 0.1,
+    format: secs,
+    advanced: true,
+    explain: 'The slowest a single movement takes \u2014 the passenger who needs a moment.',
+  },
+  {
+    key: 'shuffleMovements.none',
+    kind: 'slider',
+    section: 'timing',
+    label: 'Movements: clear row',
+    min: 0,
+    max: 6,
+    step: 1,
+    format: plain,
+    explain: 'Movements needed just to sit down when nobody is in the way. Even this is not free.',
+  },
+  {
+    key: 'shuffleMovements.aisle',
+    kind: 'slider',
+    section: 'timing',
+    label: 'Movements: aisle seat blocks',
+    min: 0,
+    max: 14,
+    step: 1,
+    format: plain,
+    explain: 'Movements when the aisle seat is already taken and its occupant has to get out.',
+  },
+  {
+    key: 'shuffleMovements.middle',
+    kind: 'slider',
+    section: 'timing',
+    label: 'Movements: middle seat blocks',
+    min: 0,
+    max: 14,
+    step: 1,
+    format: plain,
+    explain: 'Movements when the middle seat is occupied but the aisle seat is free.',
+  },
+  {
+    key: 'shuffleMovements.both',
+    kind: 'slider',
+    section: 'timing',
+    label: 'Movements: both block',
+    min: 0,
+    max: 20,
+    step: 1,
+    format: plain,
+    explain: 'The window-passenger-arrives-last case: two seated neighbours both have to get up.',
+  },
+  {
+    key: 'shuffleSamePartyMovements',
+    kind: 'slider',
+    section: 'timing',
+    label: 'Movements within a party',
+    min: 0,
+    max: 10,
+    step: 1,
+    format: plain,
+    explain: 'Much cheaper: your own family stands up for you without the polite negotiation.',
   },
   {
     key: 'shuffleTime.1',
@@ -270,7 +386,7 @@ export const CONTROLS = [
     max: 40,
     step: 0.5,
     format: secs,
-    explain: 'Time lost when two seated neighbours have to get up — the window-seat-arrives-last penalty.',
+    explain: 'Time lost when two seated neighbours have to get up \u2014 the window-seat-arrives-last penalty.',
   },
   {
     key: 'shuffleCv',
@@ -295,6 +411,17 @@ export const CONTROLS = [
     explain: 'Much faster: your own family stands up for you without the polite negotiation.',
   },
   {
+    key: 'doorArrivalMean',
+    kind: 'slider',
+    section: 'timing',
+    label: 'Door arrival interval',
+    min: 1,
+    max: 10,
+    step: 0.1,
+    format: secs,
+    explain: 'Average gap between passengers reaching the aircraft door \u2014 the rate the gate can physically feed the jet bridge.',
+  },
+  {
     key: 'gateScanMean',
     kind: 'slider',
     section: 'timing',
@@ -303,7 +430,7 @@ export const CONTROLS = [
     max: 10,
     step: 0.1,
     format: secs,
-    explain: 'Seconds between boarding-pass scans — the rate the gate can physically feed the jet bridge.',
+    explain: 'Seconds between boarding-pass scans \u2014 the rate the gate can physically feed the jet bridge.',
   },
   {
     key: 'gateScanSd',
@@ -320,14 +447,15 @@ export const CONTROLS = [
   // -------------------------------------------------------------------- bins
   {
     key: 'binBagsPerRowSide',
-    kind: 'slider',
+    kind: 'nullable-slider',
     section: 'bins',
     label: 'Bin capacity per row-side',
     min: 1,
     max: 10,
     step: 1,
     format: plain,
-    explain: 'How many bags fit in the bin above one side of one row. Low-cost cabins fit fewer.',
+    autoLabel: 'Use airframe',
+    explain: 'How many bags fit in the bin above one side of one row. Bin volume is an airframe property; override it to model a retrofit.',
   },
   {
     key: 'binSearchRadius',
@@ -471,6 +599,25 @@ export const CONTROLS = [
     explain: 'How often curves are recorded. Only affects chart resolution, never the result.',
   },
 ]
+
+/** Root key of a possibly-dotted control key. */
+export const rootKey = (key) => String(key).split('.')[0]
+
+/**
+ * The engine is the authority on which parameters exist: every simulation
+ * field has an entry in DEFAULTS (ENGINE_SPEC section 8). So the panel renders
+ * a control only when the live engine's defaults contain its key. That keeps
+ * the UI honest as the engine's parameterisation evolves, and means a control
+ * for a parameter that no longer exists simply disappears instead of writing
+ * dead values into the config.
+ */
+export function presentControls(section, defaults) {
+  return CONTROLS.filter((c) => c.section === section).filter((c) => {
+    if (c.kind === 'aircraft' || c.kind === 'strategy' || c.kind === 'seed' || c.kind === 'doors') return true
+    if (c.key === 'runs') return true
+    return Object.prototype.hasOwnProperty.call(defaults || {}, rootKey(c.key))
+  })
+}
 
 export const CONTROLS_BY_SECTION = SECTIONS.reduce((acc, s) => {
   acc[s.id] = CONTROLS.filter((c) => c.section === s.id)

@@ -2,20 +2,29 @@
  * The frame every control sits in: name on the left, live value on the right,
  * the control itself, then one line of plain English underneath.
  */
-export function Field({ id, label, value, explain, disabled, reason, children, inline = false }) {
+export function Field({ id, label, value, explain, disabled, reason, children, inline = false, labelFor = true }) {
   const describedBy = explain ? `${id}-help` : undefined
+  const labelId = `${id}-label`
   return (
     <div
       className={`field${disabled ? ' is-disabled' : ''}${inline ? ' field--inline' : ''}`}
       title={disabled ? reason : undefined}
     >
       <div className="field__head">
-        <label className="field__label" htmlFor={id}>
-          {label}
-        </label>
+        {labelFor ? (
+          <label className="field__label" htmlFor={id} id={labelId}>
+            {label}
+          </label>
+        ) : (
+          // Radio groups and composite controls are not labelable elements, so
+          // they reference this by id instead of being wrapped by a <label>.
+          <span className="field__label" id={labelId}>
+            {label}
+          </span>
+        )}
         {value != null && <span className="field__value num">{value}</span>}
       </div>
-      <div className="field__control">{children({ describedBy })}</div>
+      <div className="field__control">{children({ describedBy, labelId })}</div>
       {explain && (
         <p className="field__help" id={describedBy}>
           {disabled && reason ? reason : explain}

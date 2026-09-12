@@ -70,7 +70,7 @@ export function heatLevel(value, min, max) {
   if (!Number.isFinite(value)) return null
   if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return 0
   const t = (value - min) / (max - min)
-  return Math.max(0, Math.min(HEAT_STEPS - 1, Math.floor(t * HEAT_STEPS - 1e-9)))
+  return Math.max(0, Math.min(HEAT_STEPS - 1, Math.floor(t * HEAT_STEPS)))
 }
 
 /** Inclusive value edges of each heat bin, for the scale legend. */
@@ -146,3 +146,42 @@ export function shapePath(shape, cx, cy, r = 4.5) {
       return `M${cx - r},${cy}a${r},${r} 0 1,0 ${r * 2},0a${r},${r} 0 1,0 ${-r * 2},0Z`
   }
 }
+
+/**
+ * Activity stack (chart 5 — time breakdown).
+ *
+ * These are the cabin-view state tokens, so "blue = walking, amber = stowing,
+ * red = blocked" means the same thing in the analytics tab as it does on the
+ * seat map. Shuffle has no state token of its own, so it borrows categorical
+ * slot 4 (violet), which is the pair furthest from red in both modes.
+ *
+ * Validated (surfaces #ffffff / #131924):
+ *   light — worst adjacent CVD ΔE 25.4, normal 28.7, contrast relief on
+ *           --state-stowing (2.15:1) covered by value labels + table view
+ *   dark  — worst adjacent CVD ΔE 20.9, normal 22.2, all ≥ 3:1
+ */
+export const ACTIVITY_SERIES = [
+  { key: 'walk', label: 'Walking', color: 'var(--state-walking)' },
+  { key: 'stow', label: 'Stowing', color: 'var(--state-stowing)' },
+  { key: 'shuffle', label: 'Shuffling', color: 'var(--series-4)' },
+  { key: 'blocked', label: 'Blocked', color: 'var(--state-waiting)' },
+]
+
+/**
+ * One-hue ORDINAL ramps, built as opacity steps of `--series-1` so they stay
+ * inside the frozen palette (theme.css ships no single-hue ramp of its own —
+ * `--heat-*` is a multi-hue semantic heat scale, which is a different job).
+ *
+ * Validated with `--ordinal` in both modes: monotone lightness, adjacent ΔL
+ * ≥ 0.06, single hue (≤ 2° spread), light end 2.14:1 light / 2.69:1 dark.
+ */
+export const ORDINAL_STEPS_4 = [0.5, 0.66, 0.83, 1]
+export const ORDINAL_STEPS_3 = [0.55, 0.78, 1]
+
+/** Interference severity, ordered — none → same party → 1 blocker → 2 blockers. */
+export const INTERFERENCE_SERIES = [
+  { key: 'none', label: 'No blocker', opacity: ORDINAL_STEPS_4[0] },
+  { key: 'sameParty', label: 'Same party', opacity: ORDINAL_STEPS_4[1] },
+  { key: 'one', label: '1 blocker', opacity: ORDINAL_STEPS_4[2] },
+  { key: 'two', label: '2 blockers', opacity: ORDINAL_STEPS_4[3] },
+]

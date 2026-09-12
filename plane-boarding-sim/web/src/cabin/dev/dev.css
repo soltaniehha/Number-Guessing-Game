@@ -1,0 +1,69 @@
+/* Dev harness chrome only — not shipped in the app. */
+
+.dev {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 10px;
+  height: 100%;
+  padding: 10px;
+  background: var(--bg);
+}
+
+.dev__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.dev__title { font-size: 13px; letter-spacing: -0.01em; }
+
+.dev__field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+}
+
+.dev__field select,
+.dev__field input[type='range'] {
+  font: inherit;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px 5px;
+}
+
+.dev__field input[type='range'] { width: 90px; padding: 0; }
+.dev__field--check { text-transform: none; letter-spacing: normal; color: var(--text-2); }
+
+.dev__btn {
+  margin-left: auto;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.dev__stage {
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.dev__foot { display: grid; gap: 8px; }

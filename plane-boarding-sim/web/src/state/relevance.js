@@ -38,7 +38,6 @@ export function relevanceOf(key, config, aircraft) {
   const groups = sumWeights(config.partySizeWeights, ['2', '3', '4', '5'])
   const doorCount = (config.doors || []).length
   const maxDepth = aircraft?.maxDepth ?? 3
-  const aisles = aircraft?.aisleCount ?? 1
 
   switch (key) {
     case 'zoneCount':
@@ -80,12 +79,15 @@ export function relevanceOf(key, config, aircraft) {
     case 'childRate':
     case 'keepPartiesTogether':
     case 'shuffleSamePartyTime':
+    case 'shuffleSamePartyMovements':
       return groups > 0
         ? RELEVANT
         : no('Everyone is travelling alone, so there are no parties.')
 
     case 'stowBaseMean':
     case 'stowCv':
+    case 'stowWeibullScale':
+    case 'stowWeibullShape':
     case 'stowVariability':
     case 'binBagsPerRowSide':
     case 'binSearchRadius':
@@ -102,11 +104,14 @@ export function relevanceOf(key, config, aircraft) {
         : no('Only matters when some passengers carry two bags.')
 
     case 'shuffleTime.1':
+    case 'shuffleMovements.aisle':
       return maxDepth >= 2
         ? RELEVANT
         : no('Every seat on this aircraft touches the aisle.')
 
     case 'shuffleTime.2':
+    case 'shuffleMovements.middle':
+    case 'shuffleMovements.both':
       return maxDepth >= 3
         ? RELEVANT
         : no('No seat on this aircraft has two people between it and the aisle.')

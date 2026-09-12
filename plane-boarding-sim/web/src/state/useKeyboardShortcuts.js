@@ -12,14 +12,31 @@ import { useEffect } from 'react'
 import { usePlayback, useStore } from './StoreProvider.jsx'
 
 const TYPING = new Set(['INPUT', 'TEXTAREA', 'SELECT'])
+const RANGE_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'])
+const ACTIVATION_KEYS = new Set([' ', 'Spacebar', 'Enter'])
 
 export function isTypingTarget(el) {
   if (!el) return false
   if (el.isContentEditable) return true
   if (!TYPING.has(el.tagName)) return false
-  // Range inputs are controls, not text fields: arrows there belong to the slider.
+  // Range inputs are controls, not text fields; see isOwnedByTarget.
   if (el.tagName === 'INPUT' && el.type === 'range') return false
   return true
+}
+
+/**
+ * True when the focused element has a better claim on this key than the app
+ * does: arrows belong to a focused slider, and Space or Enter belongs to a
+ * focused button, switch or checkbox.
+ */
+export function isOwnedByTarget(el, key) {
+  if (!el) return false
+  const tag = el.tagName
+  if (tag === 'INPUT' && el.type === 'range' && RANGE_KEYS.has(key)) return true
+  if (!ACTIVATION_KEYS.has(key)) return false
+  if (tag === 'BUTTON' || tag === 'A') return true
+  if (tag === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) return true
+  return el.getAttribute?.('role') === 'switch' || el.getAttribute?.('role') === 'radio'
 }
 
 export function useKeyboardShortcuts() {
@@ -36,6 +53,7 @@ export function useKeyboardShortcuts() {
         return
       }
       if (isTypingTarget(ev.target)) return
+      if (isOwnedByTarget(ev.target, ev.key)) return
       if (modal) return
 
       switch (ev.key) {

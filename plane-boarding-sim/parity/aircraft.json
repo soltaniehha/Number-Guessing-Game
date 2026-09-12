@@ -1,0 +1,270 @@
+{
+  "_comment": "Aircraft roster. PURELY DECLARATIVE -- no logic lives here; python/plane_boarding/aircraft.py and web/src/sim/aircraft.js both resolve geometry from this one file. Row numbers are the numbers PRINTED on the boarding pass; the engine derives contiguous physical row slots from them. A skipped row NUMBER costs no cabin length (it is pure numbering); a real galley/lavatory complex is expressed as a `monuments` entry and DOES cost length. `_confidence` fields mark values that are single-sourced or inferred rather than corroborated.",
+
+  "_schema": {
+    "aircraft": "id, name, manufacturer, description, seatPitchIn, aisleCount, cabins[], doors[], monuments[], binBagsPerRowSide, defaultConfig?",
+    "cabin": "id, name, classKey(first|business|premium|economy), rows[], layout[] ('|' marks an aisle), pitchIn, exitRows[], missingSeats[]",
+    "door": "id, name, rowBefore(number|null -- null = aft of the last row), aisleIndex, kind(jetbridge|airstair|service|overwing), boardable, defaultEnabled",
+    "monument": "afterRow, lengthM -- extra longitudinal cabin length immediately aft of that row number, with no seats in it",
+    "binBagsPerRowSide": "overhead-bin slots per row per contiguous seat run (a run = the seats between two aisles, or between an aisle and the fuselage). A 3-4-3 row therefore has THREE bin runs, a 3-3 row has two.",
+    "aisleIndex_on_doors": "the aisle a door's vestibule preferentially feeds. On twin-aisle types the boardable doors are given ALTERNATING aisle indices, because the cross-aisle at each door vestibule lets ground staff stream one door into each aisle -- which is the whole point of the split_by_aisle door policy."
+  },
+
+  "aircraft": [
+    {
+      "id": "e175",
+      "name": "Embraer E175",
+      "manufacturer": "Embraer",
+      "description": "76-seat regional jet, 2-2 across, three cabins, one boarding door. Legacy overhead bins make it the tightest bag-capacity aircraft in the roster.",
+      "seatPitchIn": 31,
+      "aisleCount": 1,
+      "binBagsPerRowSide": 1,
+      "_binNote": "~36 bags for 76 seats = 0.47 bags/seat. Notoriously tight; United's 2024 retrofit adds ~29 bags (+80%) for 0.86/seat. Model the pre-retrofit aircraft: it is the interesting one.",
+      "_geometryNote": "The E175 has NO overwing exits -- four floor-level doors only, nothing in between. It is one continuous 2-2 tube. Seat-map sites that show overwing exits here are describing the E190/E195. Row 5 is skipped as pure numbering; row 13 IS present.",
+      "monuments": [],
+      "cabins": [
+        {
+          "id": "first", "name": "First Class", "classKey": "first",
+          "rows": [1, 2, 3, 4],
+          "layout": ["A", "|", "C", "D"],
+          "_layoutNote": "1-2 asymmetric: a single seat on the port side, a pair on starboard.",
+          "pitchIn": 37, "exitRows": [], "missingSeats": []
+        },
+        {
+          "id": "premium", "name": "Premium Class", "classKey": "premium",
+          "rows": [6, 7, 8, 9],
+          "layout": ["A", "B", "|", "C", "D"],
+          "pitchIn": 34, "exitRows": [], "missingSeats": []
+        },
+        {
+          "id": "main", "name": "Main Cabin", "classKey": "economy",
+          "rows": [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21],
+          "layout": ["A", "B", "|", "C", "D"],
+          "pitchIn": 31, "exitRows": [], "missingSeats": []
+        }
+      ],
+      "doors": [
+        { "id": "1L", "name": "Forward left (L1)", "rowBefore": 1, "aisleIndex": 0, "kind": "jetbridge", "boardable": true, "defaultEnabled": true },
+        { "id": "1R", "name": "Forward right (R1)", "rowBefore": 1, "aisleIndex": 0, "kind": "service", "boardable": false, "defaultEnabled": false },
+        { "id": "2L", "name": "Aft left (L2)", "rowBefore": null, "aisleIndex": 0, "kind": "service", "boardable": false, "defaultEnabled": false },
+        { "id": "2R", "name": "Aft right (R2)", "rowBefore": null, "aisleIndex": 0, "kind": "service", "boardable": false, "defaultEnabled": false }
+      ],
+      "_doorNote": "1L is the ONLY boarding door on this type, always. A two-door scenario is physically impossible here and the config layer rejects one.",
+      "defaultConfig": {
+        "_comment": "Regional-jet bag mix. With only ~36 bin slots for 76 seats, the airline valet-checks most roll-aboards at the jetbridge BEFORE the passenger boards, so the bags that actually enter the cabin are far fewer than on a mainline flight. Without this the aircraft would gate-check ~40% of the cabin instead of United's reported ~9%.",
+        "bagWeights": { "0": 0.42, "1": 0.50, "2": 0.08 }
+      }
+    },
+
+    {
+      "id": "a320neo",
+      "name": "Airbus A320neo",
+      "manufacturer": "Airbus",
+      "description": "186-seat single-class European LCC configuration (easyJet). 3-3 across, 29in slimline pitch, and the roster's cleanest two-door case: 1L + 2L boarding at remote stands is routine.",
+      "seatPitchIn": 29,
+      "aisleCount": 1,
+      "binBagsPerRowSide": 4,
+      "_binNote": "Airspace XL bins, 8 bags per bin. 31 rows x 2 runs x 4 = 248 slots for 186 seats -- genuinely comfortable, which is exactly the contrast with the E175.",
+      "_geometryNote": "No skipped rows and no deleted seats: 31 x 6 = 186 exactly. Rows 12 and 13 are the Type III overwing exit pairs; easyJet deletes no seats there. Row 31 is the worst seat in the aircraft -- no window, fuselage taper, backs onto the aft galley.",
+      "monuments": [],
+      "cabins": [
+        {
+          "id": "economy", "name": "Economy", "classKey": "economy",
+          "rows": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
+          "layout": ["A", "B", "C", "|", "D", "E", "F"],
+          "pitchIn": 29, "exitRows": [12, 13], "missingSeats": []
+        }
+      ],
+      "doors": [
+        { "id": "1L", "name": "Forward left (L1)", "rowBefore": 1, "aisleIndex": 0, "kind": "jetbridge", "boardable": true, "defaultEnabled": true },
+        { "id": "1R", "name": "Forward right (R1)", "rowBefore": 1, "aisleIndex": 0, "kind": "service", "boardable": false, "defaultEnabled": false },
+        { "id": "OW1", "name": "Overwing hatch (row 12)", "rowBefore": 12, "aisleIndex": 0, "kind": "overwing", "boardable": false, "defaultEnabled": false },
+        { "id": "OW2", "name": "Overwing hatch (row 13)", "rowBefore": 13, "aisleIndex": 0, "kind": "overwing", "boardable": false, "defaultEnabled": false },
+        { "id": "2L", "name": "Aft left (L2)", "rowBefore": null, "aisleIndex": 0, "kind": "airstair", "boardable": true, "defaultEnabled": true },
+        { "id": "2R", "name": "Aft right (R2)", "rowBefore": null, "aisleIndex": 0, "kind": "service", "boardable": false, "defaultEnabled": false }
+      ]
+    },
+
+    {
+      "id": "b737_max8",
+      "name": "Boeing 737 MAX 8-200",
+      "manufacturer": "Boeing",
+      "description": "197-seat high-density LCC configuration (Ryanair). The mid-cabin exit door pair is what raises the certified exit limit from 189 to 200 seats -- and it costs four seats to do it. Boards front and rear simultaneously as standard.",
+      "seatPitchIn": 28.5,
+      "aisleCount": 1,
+      "binBagsPerRowSide": 3,
+      "_binNote": "Boeing Space Bins: ~174 bags / 30 usable row-pairs / 2 runs = 2.9 per row-side.",
+      "_geometryNote": "34 row numbers (1-35, no row 13). 31 full rows x 6 = 186, plus row 1 (2 seats: forward galley and jumpseat delete 1A/1D/1E/1F), row 27 (5 seats: aft-facing crew jumpseat deletes 27F) and row 28 (4 seats: the mid-cabin exit door pair deletes 28A/28F) = 197. 29A and 29F consequently have near-unlimited legroom.",
+      "monuments": [],
+      "cabins": [
+        {
+          "id": "economy", "name": "Economy", "classKey": "economy",
+          "rows": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35],
+          "layout": ["A", "B", "C", "|", "D", "E", "F"],
+          "pitchIn": 28.5,
+          "exitRows": [17, 18, 28],
+          "missingSeats": ["1A", "1D", "1E", "1F", "27F", "28A", "28F"]
+        }
+      ],
+      "doors": [
+        { "id": "1L", "name": "Forward left (L1)", "rowBefore": 1, "aisleIndex": 0, "kind": "airstair", "boardable": true, "defaultEnabled": true },
+        { "id": "1R", "name": "Forward right (R1)", "rowBefore": 1, "aisleIndex": 0, "kind": "service", "boardable": false, "defaultEnabled": false },
+        { "id": "OW1", "name": "Overwing hatch (row 17)", "rowBefore": 17, "aisleIndex": 0, "kind": "overwing", "boardable": false, "defaultEnabled": false },
+        { "id": "OW2", "name": "Overwing hatch (row 18)", "rowBefore": 18, "aisleIndex": 0, "kind": "overwing", "boardable": false, "defaultEnabled": false },
+        { "id": "MIDL", "name": "Mid-cabin left (row 28)", "rowBefore": 28, "aisleIndex": 0, "kind": "service", "boardable": false, "defaultEnabled": false },
+        { "id": "MIDR", "name": "Mid-cabin right (row 28)", "rowBefore": 28, "aisleIndex": 0, "kind": "service", "boardable": false, "defaultEnabled": false },
+        { "id": "2L", "name": "Aft left (L2)", "rowBefore": null, "aisleIndex": 0, "kind": "airstair", "boardable": true, "defaultEnabled": true },
+        { "id": "2R", "name": "Aft right (R2)", "rowBefore": null, "aisleIndex": 0, "kind": "service", "boardable": false, "defaultEnabled": false }
+      ]
+    },
+
+    {
+      "id": "a220_300",
+      "name": "Airbus A220-300",
+      "manufacturer": "Airbus",
+      "description": "130-seat Delta configuration. The asymmetric one: an off-centre aisle gives 2-3 seating, so there is only ONE middle seat per row instead of two -- and the port side can never produce a worst-case seat shuffle.",
+      "seatPitchIn": 31,
+      "aisleCount": 1,
+      "binBagsPerRowSide": 3,
+      "_binNote": "[C] inferred; the A220's bins are large for the class but no published bag count was found.",
+      "_geometryNote": "Rows 4-9 are skipped numbering, not cabin length. Row 17 is the overwing exit row and has only THREE seats: 17A and 17F are deleted for exit clearance, leaving 17C as a solo seat with an empty window space beside it. 12 + (9x5 - 2) + (15x5) = 130.",
+      "_confidence": "[C] on the letter scheme: two schemes appear in sources. We use Delta house style A,C | D,E,F.",
+      "monuments": [],
+      "cabins": [
+        {
+          "id": "first", "name": "First Class", "classKey": "first",
+          "rows": [1, 2, 3],
+          "layout": ["A", "C", "|", "D", "F"],
+          "pitchIn": 37, "exitRows": [], "missingSeats": []
+        },
+        {
+          "id": "comfort", "name": "Comfort+", "classKey": "premium",
+          "rows": [10, 11, 12, 13, 14, 15, 16, 17, 18],
+          "layout": ["A", "C", "|", "D", "E", "F"],
+          "pitchIn": 34, "exitRows": [17], "missingSeats": ["17A", "17F"]
+        },
+        {
+          "id": "main", "name": "Main Cabin", "classKey": "economy",
+          "rows": [19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33],
+          "layout": ["A", "C", "|", "D", "E", "F"],
+          "pitchIn": 31, "exitRows": [], "missingSeats": []
+        }
+      ],
+      "doors": [
+        { "id": "1L", "name": "Forward left (L1)", "rowBefore": 1, "aisleIndex": 0, "kind": "jetbridge", "boardable": true, "defaultEnabled": true },
+        { "id": "1R", "name": "Forward right (R1)", "rowBefore": 1, "aisleIndex": 0, "kind": "service", "boardable": false, "defaultEnabled": false },
+        { "id": "OW1", "name": "Overwing hatch (row 17)", "rowBefore": 17, "aisleIndex": 0, "kind": "overwing", "boardable": false, "defaultEnabled": false },
+        { "id": "2L", "name": "Aft left (L2)", "rowBefore": null, "aisleIndex": 0, "kind": "airstair", "boardable": true, "defaultEnabled": false },
+        { "id": "2R", "name": "Aft right (R2)", "rowBefore": null, "aisleIndex": 0, "kind": "service", "boardable": false, "defaultEnabled": false }
+      ]
+    },
+
+    {
+      "id": "b777_300er",
+      "name": "Boeing 777-300ER",
+      "manufacturer": "Boeing",
+      "description": "354-seat three-class Emirates configuration. Twin aisle, 3-4-3 economy, and the roster's best test of monuments: two lavatory/galley complexes physically break the economy cabin.",
+      "seatPitchIn": 32,
+      "aisleCount": 2,
+      "binBagsPerRowSide": 4,
+      "_binNote": "Widebody bins. A 3-4-3 row puts 10 passengers under 3 bin runs, so local starvation is rare even at high load.",
+      "_geometryNote": "Economy letters are A,B,C | D,E,F,G | H,J,K -- I is skipped, G, H and J are all used. Rows 20-22 and 34-36 carry no seats because lavatory/galley monuments sit there; they are modelled as real cabin length via `monuments`, unlike the purely numeric gaps at rows 3-5 and 12-13.",
+      "_confidence": "[A] exit rows 23/37, the lav/galley breaks, last row 50 and the 3-4-3 letters. [B]/[C] the economy start row, the premium-cabin letters, and the aft taper (48/49/50 losing A and K) which is our arithmetic to reconcile 304 economy seats.",
+      "monuments": [
+        { "afterRow": 19, "lengthM": 0.8128, "_note": "Mid-cabin lavatory/galley block occupying the space numbered 20-22." },
+        { "afterRow": 33, "lengthM": 0.8128, "_note": "Second lavatory/galley block occupying the space numbered 34-36." }
+      ],
+      "cabins": [
+        {
+          "id": "first", "name": "First Class", "classKey": "first",
+          "rows": [1, 2],
+          "layout": ["A", "|", "D", "G", "|", "K"],
+          "pitchIn": 79, "exitRows": [], "missingSeats": []
+        },
+        {
+          "id": "business", "name": "Business Class", "classKey": "business",
+          "rows": [6, 7, 8, 9, 10, 11],
+          "layout": ["A", "B", "|", "D", "E", "F", "|", "J", "K"],
+          "pitchIn": 44, "exitRows": [], "missingSeats": []
+        },
+        {
+          "id": "economy", "name": "Economy", "classKey": "economy",
+          "rows": [14, 15, 16, 17, 18, 19, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50],
+          "layout": ["A", "B", "C", "|", "D", "E", "F", "G", "|", "H", "J", "K"],
+          "pitchIn": 32,
+          "exitRows": [23, 37],
+          "missingSeats": ["48A", "48K", "49A", "49K", "50A", "50K"]
+        }
+      ],
+      "doors": [
+        { "id": "1L", "name": "Door 1 left (L1)", "rowBefore": 1, "aisleIndex": 0, "kind": "jetbridge", "boardable": true, "defaultEnabled": true },
+        { "id": "1R", "name": "Door 1 right (R1)", "rowBefore": 1, "aisleIndex": 1, "kind": "service", "boardable": false, "defaultEnabled": false },
+        { "id": "2L", "name": "Door 2 left (L2)", "rowBefore": 14, "aisleIndex": 1, "kind": "jetbridge", "boardable": true, "defaultEnabled": true },
+        { "id": "2R", "name": "Door 2 right (R2)", "rowBefore": 14, "aisleIndex": 0, "kind": "service", "boardable": false, "defaultEnabled": false },
+        { "id": "3L", "name": "Door 3 left (L3)", "rowBefore": 23, "aisleIndex": 0, "kind": "service", "boardable": false, "defaultEnabled": false },
+        { "id": "3R", "name": "Door 3 right (R3)", "rowBefore": 23, "aisleIndex": 1, "kind": "service", "boardable": false, "defaultEnabled": false },
+        { "id": "4L", "name": "Door 4 left (L4)", "rowBefore": 37, "aisleIndex": 1, "kind": "service", "boardable": false, "defaultEnabled": false },
+        { "id": "4R", "name": "Door 4 right (R4)", "rowBefore": 37, "aisleIndex": 0, "kind": "service", "boardable": false, "defaultEnabled": false },
+        { "id": "5L", "name": "Door 5 left (L5)", "rowBefore": null, "aisleIndex": 0, "kind": "service", "boardable": false, "defaultEnabled": false },
+        { "id": "5R", "name": "Door 5 right (R5)", "rowBefore": null, "aisleIndex": 1, "kind": "service", "boardable": false, "defaultEnabled": false }
+      ]
+    },
+
+    {
+      "id": "b787_9",
+      "name": "Boeing 787-9 Dreamliner",
+      "manufacturer": "Boeing",
+      "description": "257-seat four-cabin United configuration. Twin aisle, 3-3-3 economy, and the roster's clearest demonstration of what a second boarding door is worth: it defaults to 2L only, which is what most widebody flights actually do.",
+      "seatPitchIn": 31,
+      "aisleCount": 2,
+      "binBagsPerRowSide": 4,
+      "_binNote": "787 bins are the largest in the industry.",
+      "_geometryNote": "Seat letters are A,B,C | D,E,F | J,K,L -- United's 787 skips G, H AND I. This differs both from Boeing's own ABC-DEF-HJK convention and from the Emirates 777 in this roster, which is exactly why letters are declared per aircraft rather than assumed. Rows 13-19, 23-29 and 36-41 are REAL galley/lavatory complexes, not numbering gaps, so they appear as `monuments` and add genuine walking distance.",
+      "_confidence": "[A] the letter scheme and the cabin row bands. [C] the Polaris 1-2-1 letters (A/D/F/L), the monument lengths, and the aft taper (rows 55-57) which is our arithmetic to reconcile 134 aft-economy seats.",
+      "monuments": [
+        { "afterRow": 12, "lengthM": 2.5, "_note": "Polaris galley + lavatory complex, numbered 13-19." },
+        { "afterRow": 22, "lengthM": 2.5, "_note": "Mid-forward galley + lavatory complex, numbered 23-29." },
+        { "afterRow": 35, "lengthM": 2.5, "_note": "Mid-aft galley + lavatory complex, numbered 36-41." }
+      ],
+      "cabins": [
+        {
+          "id": "polaris", "name": "Polaris Business", "classKey": "business",
+          "rows": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+          "layout": ["A", "|", "D", "F", "|", "L"],
+          "pitchIn": 78, "exitRows": [], "missingSeats": []
+        },
+        {
+          "id": "premium_plus", "name": "Premium Plus", "classKey": "premium",
+          "rows": [20, 21, 22],
+          "layout": ["A", "C", "|", "D", "E", "F", "|", "J", "L"],
+          "pitchIn": 38, "exitRows": [], "missingSeats": []
+        },
+        {
+          "id": "economy_fwd", "name": "Economy (forward)", "classKey": "economy",
+          "rows": [30, 31, 32, 33, 34, 35],
+          "layout": ["A", "B", "C", "|", "D", "E", "F", "|", "J", "K", "L"],
+          "pitchIn": 31, "exitRows": [30], "missingSeats": []
+        },
+        {
+          "id": "economy_aft", "name": "Economy (aft)", "classKey": "economy",
+          "rows": [42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57],
+          "layout": ["A", "B", "C", "|", "D", "E", "F", "|", "J", "K", "L"],
+          "pitchIn": 31,
+          "exitRows": [42],
+          "missingSeats": ["55A", "55L", "56A", "56L", "57A", "57B", "57C", "57J", "57K", "57L"]
+        }
+      ],
+      "doors": [
+        { "id": "1L", "name": "Door 1 left (L1)", "rowBefore": 1, "aisleIndex": 0, "kind": "jetbridge", "boardable": true, "defaultEnabled": false },
+        { "id": "1R", "name": "Door 1 right (R1)", "rowBefore": 1, "aisleIndex": 1, "kind": "service", "boardable": false, "defaultEnabled": false },
+        { "id": "2L", "name": "Door 2 left (L2)", "rowBefore": 20, "aisleIndex": 1, "kind": "jetbridge", "boardable": true, "defaultEnabled": true },
+        { "id": "2R", "name": "Door 2 right (R2)", "rowBefore": 20, "aisleIndex": 0, "kind": "service", "boardable": false, "defaultEnabled": false },
+        { "id": "3L", "name": "Door 3 left (L3)", "rowBefore": 30, "aisleIndex": 0, "kind": "service", "boardable": false, "defaultEnabled": false },
+        { "id": "3R", "name": "Door 3 right (R3)", "rowBefore": 30, "aisleIndex": 1, "kind": "service", "boardable": false, "defaultEnabled": false },
+        { "id": "4L", "name": "Door 4 left (L4)", "rowBefore": 42, "aisleIndex": 1, "kind": "service", "boardable": false, "defaultEnabled": false },
+        { "id": "4R", "name": "Door 4 right (R4)", "rowBefore": 42, "aisleIndex": 0, "kind": "service", "boardable": false, "defaultEnabled": false }
+      ],
+      "_doorNote": "Single-door boarding is still the norm for widebodies -- most 787 flights board 2L only, because the extra staffing is not judged worth it. 1L is boardable but off by default so the user can switch it on and see what the second bridge buys."
+    }
+  ]
+}

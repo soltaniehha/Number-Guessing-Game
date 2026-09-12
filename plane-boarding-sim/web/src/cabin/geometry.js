@@ -23,9 +23,11 @@ export const WALL_M = 0.26
  */
 export const MAX_LATERAL_EXAGGERATION = 2.4
 /** Wing half-span as a multiple of the fuselage half-width. */
-export const WING_SPAN_FACTOR = 0.85
+export const WING_SPAN_FACTOR = 0.42
 /** Lateral offset of the jet-bridge queue lane, as a multiple of half-width. */
-export const QUEUE_LANE_FACTOR = 1.42
+export const QUEUE_LANE_FACTOR = 1.18
+/** A queue lane never runs further aft than this fraction of the aeroplane. */
+export const QUEUE_LANE_MAX_FRACTION = 0.46
 
 /** Below these pixel sizes labels are dropped rather than crushed. */
 export const MIN_PX_FOR_LETTERS = 8.5
@@ -161,8 +163,9 @@ export function buildCabinModel(aircraft) {
     cabinStartM,
     cabinEndM,
     lengthM,
-    /** Total lateral extent including wings, metres. */
-    fullWidthM: halfWidthM * 2 * (1 + WING_SPAN_FACTOR),
+    /** Total lateral extent including wings and queue lanes, metres. */
+    fullWidthM:
+      halfWidthM * 2 * Math.max(1 + WING_SPAN_FACTOR, QUEUE_LANE_FACTOR + 0.14),
   }
 }
 
@@ -180,6 +183,8 @@ export function buildCabinModel(aircraft) {
  * @param {'horizontal'|'vertical'} [opts.orientation]
  * @param {number} [opts.padding] CSS px of breathing room on every side
  * @param {object} [opts.model]   memoised `buildCabinModel` result
+ * @param {string[]|Set<string>} [opts.enabledDoorIds] overrides each door's
+ *        own enabled flag, for when the live config owns the door selection
  */
 export function computeGeometry(aircraft, opts) {
   const width = Math.max(1, opts.width || 1)
@@ -280,13 +285,20 @@ export function computeGeometry(aircraft, opts) {
   }
 
   // --- doors ------------------------------------------------------------
+  const enabledIds = opts.enabledDoorIds
+    ? new Set(opts.enabledDoorIds)
+    : null
   const doors = (aircraft.doors || []).map((door) => {
     const side = door.aisleIndex >= 1 ? 1 : -1
     return {
       id: door.id,
       name: door.name,
       kind: door.kind,
-      enabled: door.enabled !== false,
+      // An explicit list wins; otherwise take the door's own flag, accepting
+      // ENGINE_SPEC's `defaultEnabled` spelling as well.
+      enabled: enabledIds
+        ? enabledIds.has(door.id)
+        : (door.enabled ?? door.defaultEnabled ?? true) !== false,
       aisleIndex: door.aisleIndex || 0,
       u: door.x * scaleLon,
       v: side * halfV,
@@ -294,11 +306,14 @@ export function computeGeometry(aircraft, opts) {
       /** Where the jet-bridge queue lane starts, just outside the skin. */
       laneV: side * halfV * QUEUE_LANE_FACTOR,
       laneLength: 0,
+      /** +1 = the queue trails aft of the door, -1 = forward of it. */
+      laneDir: 1,
     }
   })
-  assignQueueLaneLengths(doors, lengthPx)
+  assignQueueLaneLengths(doors, lengthPx, model.cabinEndM * scaleLon)
 
   const exit = exitRowRange(rows)
+  const cabinGaps = cabinForeGaps(aircraft, rows)
 
   return {
     aircraft,
@@ -324,6 +339,7 @@ export function computeGeometry(aircraft, opts) {
     exitU0: exit[0],
     exitU1: exit[1],
     rows,
+    cabinGaps,
     seatU,
     seatV,
     seatW,
@@ -373,18 +389,49 @@ function exitRowRange(rows) {
 }
 
 /**
- * Each door's queue lane runs aft from the door until the next door on the
- * same side, so two boarding queues never overlap.
+ * Give each door a queue lane that runs alongside the fuselage without
+ * colliding with another door's queue. It normally trails aft of the door;
+ * a rear door (airstairs at the back) trails forward instead, because that is
+ * where the space is.
  */
-function assignQueueLaneLengths(doors, lengthPx) {
+function assignQueueLaneLengths(doors, lengthPx, cabinEndPx) {
+  const cap = lengthPx * QUEUE_LANE_MAX_FRACTION
   for (const door of doors) {
-    let limit = lengthPx * 0.94
+    let aftLimit = Math.min(lengthPx * 0.94, cabinEndPx)
+    let foreLimit = lengthPx * 0.04
     for (const other of doors) {
       if (other === door || other.side !== door.side) continue
-      if (other.u > door.u && other.u < limit) limit = other.u
+      if (other.u > door.u) aftLimit = Math.min(aftLimit, other.u)
+      else foreLimit = Math.max(foreLimit, other.u)
     }
-    door.laneLength = Math.max(0, limit - door.u - 6)
+    const aft = Math.max(0, aftLimit - door.u - 6)
+    const fore = Math.max(0, door.u - foreLimit - 6)
+    door.laneDir = aft >= fore ? 1 : -1
+    door.laneLength = Math.min(cap, door.laneDir === 1 ? aft : fore)
   }
+}
+
+/**
+ * Clear space forward of each cabin, in plan pixels — the gap a galley or the
+ * nose leaves. Seat-letter headers are only drawn where one of these is wide
+ * enough to hold them.
+ */
+function cabinForeGaps(aircraft, rows) {
+  const gaps = new Map()
+  let previousAft = 0
+  for (const cabin of aircraft.cabins || []) {
+    let fore = Infinity
+    let aft = -Infinity
+    for (const row of rows) {
+      if (row.cabinId !== cabin.id) continue
+      fore = Math.min(fore, row.u - row.pitchPx / 2)
+      aft = Math.max(aft, row.u + row.pitchPx / 2)
+    }
+    if (!Number.isFinite(fore)) continue
+    gaps.set(cabin.id, { fore, aft, gap: fore - previousAft })
+    previousAft = aft
+  }
+  return gaps
 }
 
 /**

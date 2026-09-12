@@ -4,6 +4,10 @@
  * A preset is a *patch*: applying it means "defaults, then these values", so a
  * preset never silently inherits whatever you were fiddling with. Each carries
  * a one-line description of the real-world situation it reproduces.
+ *
+ * A patch may name a parameter under either service-time parameterisation
+ * (see lib/simParams.js); keys the live engine does not know about are dropped
+ * when the preset is applied, so a preset never writes dead values.
  */
 
 export const PRESETS = [
@@ -36,6 +40,7 @@ export const PRESETS = [
       binBagsPerRowSide: 3,
       bagWeights: { 0: 0.1, 1: 0.55, 2: 0.35 },
       gateScanMean: 1.8,
+      doorArrivalMean: 3.0,
     },
   },
   {
@@ -68,6 +73,7 @@ export const PRESETS = [
       zoneCount: 5,
       bagWeights: { 0: 0.06, 1: 0.5, 2: 0.44 },
       stowBaseMean: 15.5,
+      stowWeibullScale: 19.0,
       binBagsPerRowSide: 5,
       childRate: 0.24,
     },

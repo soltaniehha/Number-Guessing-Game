@@ -18,6 +18,22 @@
  */
 import { defaultDoorsFor } from './configDefaults.js'
 
+/**
+ * Drop keys the engine does not know about.
+ *
+ * Every simulation parameter has an entry in the engine's DEFAULTS
+ * (ENGINE_SPEC section 8), so anything outside that set is either a stale
+ * preset key from an older parameterisation or junk from a pasted blob. Either
+ * way it must not reach the config, where it would pollute the shareable diff.
+ */
+export function pickKnown(partial, defaults) {
+  const out = {}
+  for (const [key, value] of Object.entries(partial || {})) {
+    if (Object.prototype.hasOwnProperty.call(defaults, key)) out[key] = value
+  }
+  return out
+}
+
 /** Coerce a door list so it is a legal, non-empty subset of the aircraft's doors. */
 export function sanitizeDoors(doors, aircraft) {
   const available = (aircraft?.doors || []).map((d) => d.id)
@@ -65,12 +81,12 @@ export function makeConfigReducer(defaults) {
       }
 
       case 'APPLY_PRESET': {
-        const merged = { ...defaults, ...(action.patch || {}) }
+        const merged = { ...defaults, ...pickKnown(action.patch, defaults) }
         return sanitizeConfig(merged, action.aircraft)
       }
 
       case 'LOAD_CONFIG': {
-        const merged = { ...defaults, ...(action.config || {}) }
+        const merged = { ...defaults, ...pickKnown(action.config, defaults) }
         return sanitizeConfig(merged, action.aircraft)
       }
 

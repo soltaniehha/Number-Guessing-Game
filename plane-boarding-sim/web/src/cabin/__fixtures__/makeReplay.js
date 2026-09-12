@@ -98,7 +98,7 @@ function buildAircraft(spec) {
       }
       x += pitchM / 2
     }
-    x += 0.55 // class divider / galley gap
+    x += spec.dividerM ?? 1.7 // galley / lavatory block between cabins
   }
 
   const cabinEnd = x
@@ -365,6 +365,7 @@ function zoneNumber(p) {
  * @param {number} [options.loadFactor=0.92]
  * @param {'random'|'back_to_front'|'wilma'} [options.strategy='back_to_front']
  * @param {number} [options.frameInterval=0.25]
+ * @param {string[]} [options.doors] enabled door ids, overriding the defaults
  * @param {boolean} [options.typedFrames=true] emit typed arrays like the engine
  * @returns {object} Replay
  */
@@ -386,6 +387,9 @@ export function makeReplay(options = {}) {
   const passengers = generatePassengers(aircraft, rnd, loadFactor)
   const order = (STRATEGIES[strategy] || STRATEGIES.back_to_front)(passengers, rnd)
 
+  if (Array.isArray(options.doors)) {
+    for (const door of aircraft.doors) door.enabled = options.doors.includes(door.id)
+  }
   const enabledDoors = aircraft.doors.filter((d) => d.enabled)
   const doors = enabledDoors.length ? enabledDoors : [aircraft.doors[0]]
   assignDoors(passengers, doors)

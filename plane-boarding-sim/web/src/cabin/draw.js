@@ -127,35 +127,54 @@ function drawFuselage(ctx, geom, tokens) {
 
 function drawWings(ctx, geom, tokens) {
   const { exitU0, exitU1, halfV, wingSpan, lengthPx, tailStartU } = geom
-  const rootFore = exitU0 - halfV * 0.55
-  const rootAft = exitU1 + halfV * 0.75
-  const chord = Math.max(halfV * 0.6, rootAft - rootFore)
-  const fill = withAlpha(tokens['surface-3'], 0.75)
-  const edge = withAlpha(tokens.border, 0.9)
+  // Wings are filled like the fuselage so the aeroplane reads as one body
+  // rather than a silhouette with a shadow behind it.
+  const fill = withAlpha(tokens['surface-3'], 0.85)
+  const edge = withAlpha(tokens['border-strong'], 0.7)
+  ctx.lineWidth = 1
+
+  // The cabin is drawn with the lateral axis exaggerated, so a wing sized off
+  // the fuselage half-width would come out stubby and swept the wrong way.
+  // Size the chord off the span instead: it keeps the planform believable.
+  const exitMid = (exitU0 + exitU1) / 2
+  const rootChord = Math.max(halfV * 0.42, wingSpan * 1.15, (exitU1 - exitU0) + halfV * 0.2)
+  const rootFore = exitMid - rootChord * 0.42
+  const rootAft = rootFore + rootChord
+  const tipFore = rootFore + wingSpan * 0.95
+  const tipChord = rootChord * 0.4
 
   for (const sign of [-1, 1]) {
-    // Main wing: swept, tapered, hinted rather than fully drawn.
     ctx.beginPath()
-    ctx.moveTo(rootFore, sign * halfV * 0.92)
-    ctx.lineTo(rootFore + wingSpan * 0.82, sign * (halfV + wingSpan))
-    ctx.lineTo(rootFore + wingSpan * 0.82 + chord * 0.3, sign * (halfV + wingSpan))
-    ctx.lineTo(rootFore + chord, sign * halfV * 0.92)
+    ctx.moveTo(rootFore, sign * halfV * 0.8)
+    ctx.lineTo(tipFore, sign * (halfV + wingSpan))
+    ctx.lineTo(tipFore + tipChord, sign * (halfV + wingSpan))
+    ctx.lineTo(rootAft, sign * halfV * 0.8)
     ctx.closePath()
     ctx.fillStyle = fill
     ctx.fill()
     ctx.strokeStyle = edge
-    ctx.lineWidth = 1
     ctx.stroke()
 
-    // Horizontal stabiliser.
-    const stabRoot = tailStartU + (lengthPx - tailStartU) * 0.62
-    const stabSpan = wingSpan * 0.44
-    const stabChord = chord * 0.42
+    // Engine nacelle: the detail that makes the shape unmistakable.
+    const nacelleLen = rootChord * 0.52
+    const nacelleW = wingSpan * 0.22
+    const nu = rootFore + wingSpan * 0.36
+    const nv = sign * (halfV + wingSpan * 0.46)
+    roundRectPath(ctx, nu - nacelleLen * 0.6, nv - nacelleW / 2, nacelleLen, nacelleW, nacelleW / 2)
+    ctx.fillStyle = withAlpha(tokens['surface-3'], 0.95)
+    ctx.fill()
+    ctx.stroke()
+
+    // Horizontal stabiliser, rooted on the tapering tail skin.
+    const stabRoot = tailStartU + (lengthPx - tailStartU) * 0.42
+    const skin = fuselageHalfWidth(geom, stabRoot) || halfV * 0.6
+    const stabSpan = wingSpan * 0.62
+    const stabChord = rootChord * 0.6
     ctx.beginPath()
-    ctx.moveTo(stabRoot, sign * halfV * 0.5)
-    ctx.lineTo(stabRoot + stabSpan * 0.85, sign * (halfV * 0.42 + stabSpan))
-    ctx.lineTo(stabRoot + stabSpan * 0.85 + stabChord * 0.32, sign * (halfV * 0.42 + stabSpan))
-    ctx.lineTo(stabRoot + stabChord, sign * halfV * 0.5)
+    ctx.moveTo(stabRoot, sign * skin * 0.92)
+    ctx.lineTo(stabRoot + stabSpan * 0.95, sign * (skin * 0.6 + stabSpan))
+    ctx.lineTo(stabRoot + stabSpan * 0.95 + stabChord * 0.45, sign * (skin * 0.6 + stabSpan))
+    ctx.lineTo(stabRoot + stabChord, sign * skin * 0.92)
     ctx.closePath()
     ctx.fillStyle = fill
     ctx.fill()
@@ -180,7 +199,7 @@ function drawCabinFloor(ctx, geom, tokens) {
 
 function drawExitRowBands(ctx, geom, tokens) {
   const { rows, halfV } = geom
-  ctx.fillStyle = withAlpha(tokens.good, 0.09)
+  ctx.fillStyle = withAlpha(tokens.good, 0.06)
   for (const row of rows) {
     if (!row.isExitRow) continue
     ctx.fillRect(row.u - row.pitchPx / 2, -halfV, row.pitchPx, halfV * 2)
@@ -272,13 +291,24 @@ function drawRowNumbers(ctx, geom, tokens) {
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
   const offset = geom.halfV + size * 1.15
+  const cabinFirst = new Set()
+  for (const cabin of geom.aircraft.cabins || []) {
+    const first = geom.rows.find((row) => row.cabinId === cabin.id)
+    if (first) cabinFirst.add(first.rowNumber)
+  }
   for (let i = 0; i < geom.rows.length; i++) {
     const row = geom.rows[i]
-    if (stride > 1 && i !== 0 && i !== geom.rows.length - 1 && row.rowNumber % stride !== 0) {
-      continue
-    }
-    if (nearDoor(geom, row.u, 1)) continue
-    ctx.fillText(String(row.rowNumber), sx(geom, row.u, offset), sy(geom, row.u, offset))
+    const keep =
+      stride === 1 ||
+      i === 0 ||
+      i === geom.rows.length - 1 ||
+      cabinFirst.has(row.rowNumber) ||
+      row.rowNumber % stride === 0
+    if (!keep) continue
+    // A door chevron occupies the label lane, so step the number further out
+    // rather than dropping a row number altogether.
+    const v = nearDoor(geom, row.u, 1) ? offset + size * 1.5 : offset
+    ctx.fillText(String(row.rowNumber), sx(geom, row.u, v), sy(geom, row.u, v))
   }
 }
 
@@ -299,29 +329,53 @@ function drawSeatLetters(ctx, geom, tokens) {
   ctx.textBaseline = 'middle'
 
   const cabins = geom.aircraft.cabins || []
-  let previousKey = null
+  const room = size * 1.6
+  const seenLayout = new Set()
+  const labelled = new Set()
+
+  // Preferred: a header just forward of the cabin, in whatever room the nose
+  // or a galley leaves. Letters crushed against the row ahead look like a bug.
   for (const cabin of cabins) {
+    const bounds = geom.cabinGaps.get(cabin.id)
+    if (!bounds || bounds.gap < room) continue
     const key = (cabin.layout || []).join('')
-    if (key === previousKey) continue
-    previousKey = key
-    const lateral = geom.model.lateralByCabin.get(cabin.id)
-    if (!lateral) continue
-    const u = cabinForeU(geom, cabin.id) - size * 1.2
-    for (const [letter, units] of lateral) {
-      const v = units * SEAT_UNIT_M * geom.scaleLat
-      ctx.fillText(letter, sx(geom, u, v), sy(geom, u, v))
-    }
+    if (seenLayout.has(key)) continue
+    seenLayout.add(key)
+    labelled.add(cabin.id)
+    paintLetterRow(ctx, geom, cabin, bounds.fore - Math.min(bounds.gap, size * 2.2) / 2)
+  }
+
+  // Fallback: the main cabin must always be labelled, even on an aircraft
+  // whose classes run straight into one another. Put its header aft instead,
+  // where the tail always leaves room.
+  const main = biggestCabin(geom, cabins)
+  if (main && !labelled.has(main.id) && !seenLayout.has((main.layout || []).join(''))) {
+    const bounds = geom.cabinGaps.get(main.id)
+    if (bounds) paintLetterRow(ctx, geom, main, bounds.aft + size * 1.1)
   }
 }
 
-function cabinForeU(geom, cabinId) {
-  let lo = Infinity
-  for (const row of geom.rows) {
-    if (row.cabinId === cabinId && row.u - row.pitchPx / 2 < lo) {
-      lo = row.u - row.pitchPx / 2
+function paintLetterRow(ctx, geom, cabin, u) {
+  const lateral = geom.model.lateralByCabin.get(cabin.id)
+  if (!lateral) return
+  for (const [letter, units] of lateral) {
+    const v = units * SEAT_UNIT_M * geom.scaleLat
+    ctx.fillText(letter, sx(geom, u, v), sy(geom, u, v))
+  }
+}
+
+function biggestCabin(geom, cabins) {
+  let best = null
+  let bestRows = 0
+  for (const cabin of cabins) {
+    let rows = 0
+    for (const row of geom.rows) if (row.cabinId === cabin.id) rows++
+    if (rows > bestRows) {
+      bestRows = rows
+      best = cabin
     }
   }
-  return Number.isFinite(lo) ? lo : geom.cabinU0
+  return best
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +394,7 @@ export function makeScratch(paxCount, rowCount, laneCount, doorCount) {
     dotVisible: new Uint8Array(paxCount),
     /** Interpolated aisle position, metres. */
     px: new Float32Array(paxCount),
+    trail: new Float32Array(paxCount),
     pstate: new Int8Array(paxCount),
     /** Aisle occupancy per (row, lane). */
     heat: new Int16Array(Math.max(1, rowCount * laneCount)),
@@ -424,7 +479,7 @@ function accumulateHeat(geom, frame, scratch, n) {
 function paintHeat(ctx, geom, tokens, scratch) {
   const rows = geom.rows
   const lanes = geom.laneV.length
-  const laneW = geom.seatHeight * 1.9
+  const laneW = geom.seatHeight * 1.5
   for (let r = 0; r < rows.length; r++) {
     const row = rows[r]
     let total = 0
@@ -433,7 +488,7 @@ function paintHeat(ctx, geom, tokens, scratch) {
     const intensity = Math.min(1, total / 3)
 
     // Faint band across the whole row...
-    ctx.fillStyle = withAlpha(heatColor(tokens, intensity), 0.1 + intensity * 0.1)
+    ctx.fillStyle = withAlpha(hotColor(tokens, intensity), 0.05 + intensity * 0.06)
     ctx.fillRect(row.u - row.pitchPx / 2, -geom.halfV, row.pitchPx, geom.halfV * 2)
 
     // ...and a stronger wash over the lane that is actually blocked.
@@ -442,8 +497,8 @@ function paintHeat(ctx, geom, tokens, scratch) {
       if (!count) continue
       const laneIntensity = Math.min(1, count / 3)
       ctx.fillStyle = withAlpha(
-        heatColor(tokens, laneIntensity),
-        0.2 + laneIntensity * 0.3,
+        hotColor(tokens, laneIntensity),
+        0.14 + laneIntensity * 0.26,
       )
       ctx.fillRect(
         row.u - row.pitchPx / 2,
@@ -453,6 +508,15 @@ function paintHeat(ctx, geom, tokens, scratch) {
       )
     }
   }
+}
+
+/**
+ * We only ever wash rows that already have somebody in them, so the cold end
+ * of the ramp is dead weight — and blue would collide with the walking dots.
+ * Sample the hot half only: amber for one body, red for a jam.
+ */
+function hotColor(tokens, intensity) {
+  return heatColor(tokens, 0.42 + 0.58 * intensity)
 }
 
 function paintPassengers(ctx, geom, tokens, frame, scratch, n) {
@@ -552,9 +616,6 @@ function paintQueues(ctx, geom, tokens, frame, scratch) {
   for (let d = 0; d < doors.length; d++) {
     const door = doors[d]
     const count = scratch.queueCount[d]
-    door._queueShown = 0
-    door._queueHidden = 0
-    door._queueCount = count
     if (!count) continue
 
     const layout = compressQueue(count, {
@@ -565,10 +626,9 @@ function paintQueues(ctx, geom, tokens, frame, scratch) {
       out: scratch.queueBuf,
     })
     scratch.queueBuf = layout.offsets
-    door._queueShown = layout.shown
-    door._queueHidden = layout.hidden
 
     const laneV = door.laneV
+    const dir = door.laneDir || 1
     const skin = fuselageHalfWidth(geom, door.u) || geom.halfV
 
     // The jet bridge itself: a stub from the doorway out to the queue lane.
@@ -583,16 +643,19 @@ function paintQueues(ctx, geom, tokens, frame, scratch) {
     // Queue lane backing.
     ctx.beginPath()
     ctx.moveTo(door.u, laneV)
-    ctx.lineTo(door.u + Math.max(layout.offsets[layout.shown - 1] || 0, r), laneV)
+    ctx.lineTo(door.u + dir * Math.max(layout.offsets[layout.shown - 1] || 0, r), laneV)
     ctx.strokeStyle = withAlpha(tokens['surface-2'], 0.95)
     ctx.lineWidth = r * 2.9
     ctx.lineCap = 'round'
     ctx.stroke()
 
+    // Shrink the dots to match however tightly the lane had to compress, so a
+    // long queue still reads as individual people rather than a red bar.
+    const dotR = Math.max(1.1, Math.min(r, layout.spacing * 0.42))
     ctx.fillStyle = waiting
     for (let i = 0; i < layout.shown; i++) {
       ctx.beginPath()
-      ctx.arc(door.u + layout.offsets[i], laneV, r, 0, TAU)
+      ctx.arc(door.u + dir * layout.offsets[i], laneV, dotR, 0, TAU)
       ctx.fill()
     }
   }
@@ -609,7 +672,7 @@ function paintQueueBadges(ctx, geom, tokens, scratch) {
     const count = scratch.queueCount[d]
     if (!count) continue
     const label = String(count)
-    const u = door.u - size * 1.9
+    const u = door.u - (door.laneDir || 1) * size * 1.9
     const x = sx(geom, u, door.laneV)
     const y = sy(geom, u, door.laneV)
     const w = ctx.measureText(label).width + size * 1.1

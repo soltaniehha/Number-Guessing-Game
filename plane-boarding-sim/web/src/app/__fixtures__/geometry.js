@@ -8,6 +8,9 @@
  */
 
 const INCH = 0.0254
+/** Fuselage ahead of the first row and behind the last, metres. */
+const NOSE_M = 5.5
+const TAIL_M = 5.0
 
 /** Nearest-aisle index and depth for every letter in a layout row. */
 function seatSlots(layout) {
@@ -27,7 +30,7 @@ function seatSlots(layout) {
         best = k
       }
     })
-    out.push({ letter: cell, aisleIndex: best, depth: bestDist, index: i })
+    out.push({ letter: cell, aisleIndex: best, depth: bestDist, index: i, side: i < aisleAt[best] ? -1 : 1 })
   })
   return out
 }
@@ -36,15 +39,26 @@ function seatSlots(layout) {
  * Expand an aircraft spec into resolved geometry.
  * @returns {object} the spec plus `seats`, `rowSlots`, `seatCount`, `maxDepth`, `lengthM`
  */
+const round4 = (n) => Math.round(n * 10000) / 10000
+
 export function resolveAircraftSpec(spec) {
   const rowSlots = []
-  let x = 0
+  let x = NOSE_M
   let prevPitch = null
   for (const cabin of spec.cabins) {
     const pitch = (cabin.pitchIn ?? spec.seatPitchIn) * INCH
     for (const rowNumber of cabin.rows) {
       if (prevPitch !== null) x += prevPitch
-      rowSlots.push({ rowNumber, x, pitch, cabinId: cabin.id, classKey: cabin.classKey })
+      rowSlots.push({
+        rowNumber,
+        x: round4(x),
+        pitch: round4(pitch),
+        // The cabin renderer reads `pitchM` and `isExitRow`.
+        pitchM: round4(pitch),
+        isExitRow: (cabin.exitRows || []).includes(rowNumber),
+        cabinId: cabin.id,
+        classKey: cabin.classKey,
+      })
       prevPitch = pitch
     }
   }
@@ -66,7 +80,12 @@ export function resolveAircraftSpec(spec) {
           cabinId: cabin.id,
           classKey: cabin.classKey,
           aisleIndex: s.aisleIndex,
+          // The cabin renderer calls the serving aisle `lane`, and `side` is
+          // -1 for seats forward of that aisle in the layout, +1 for aft of it.
+          lane: s.aisleIndex,
+          side: s.side,
           depth: s.depth,
+          seatDepth: s.depth,
           x: geom.x,
         })
       }
@@ -74,16 +93,18 @@ export function resolveAircraftSpec(spec) {
     }
   }
 
-  const lengthM = rowSlots.length ? rowSlots[rowSlots.length - 1].x + rowSlots[rowSlots.length - 1].pitch : 0
+  const lastRow = rowSlots[rowSlots.length - 1]
+  const cabinEndM = lastRow ? lastRow.x + lastRow.pitch : 0
+  const lengthM = round4(cabinEndM + TAIL_M)
   const maxDepth = seats.reduce((m, s) => Math.max(m, s.depth), 0)
 
   const doors = spec.doors.map((d) => {
-    let dx = lengthM
+    let dx = cabinEndM
     if (d.rowBefore != null) {
       const idx = rowSlots.findIndex((r) => r.rowNumber === d.rowBefore)
       if (idx >= 0) dx = rowSlots[idx].x - 0.5 * rowSlots[idx].pitch
     }
-    return { ...d, x: dx }
+    return { ...d, x: round4(dx) }
   })
 
   return {
@@ -91,6 +112,7 @@ export function resolveAircraftSpec(spec) {
     doors,
     rowSlots,
     seats,
+    cabinEndM,
     seatCount: seats.length,
     rowCount: rowSlots.length,
     maxDepth,

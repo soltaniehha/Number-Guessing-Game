@@ -2,11 +2,16 @@
  * A deterministic *mock* engine.
  *
  * It is not a simulation: it produces RunResult-shaped output (ENGINE_SPEC
- * section 7) whose numbers move in the right direction when you move a control,
- * so the shell, charts and cabin view can be developed and demoed before the
- * real engine exists. Replaced wholesale by `src/sim/index.js`.
+ * section 7) whose numbers move in the right direction when you move a
+ * control, so the shell, charts and cabin view can be built and demoed before
+ * the real engine exists. Replaced wholesale by `src/sim/index.js`.
+ *
+ * Service-time parameters are read through `lib/simParams.js`, so this works
+ * with either the parameterisation documented in ENGINE_SPEC section 8 or the
+ * Schultz calibration now in parity/defaults.json.
  */
 import { resolveAircraft } from './aircraft.js'
+import { binCapacity, meanDoorInterval, meanShuffle, meanStowForBags } from '../../lib/simParams.js'
 
 /* ---------------------------------------------------------------- rng ---- */
 
@@ -31,7 +36,7 @@ function mulberry32(a) {
 
 /* ---------------------------------------------------- strategy character -- */
 
-/** Relative aisle efficiency, shuffle avoidance and aisle spreading per strategy. */
+/** Relative aisle efficiency, shuffle avoidance and aisle spreading. */
 const CHARACTER = {
   random: { eff: 1.15, outsideIn: 0.0, spread: 0.75 },
   back_to_front: { eff: 0.86, outsideIn: 0.0, spread: 0.2 },
@@ -51,7 +56,7 @@ const CHARACTER = {
 }
 
 /** Aisle-parallelism constant, tuned so a full A320 lands in the observed 15-45 min band. */
-const PARALLEL_BASE = 2.1
+const PARALLEL_BASE = 4.2
 
 const weightedMean = (weights) => {
   const entries = Object.entries(weights || {})
@@ -68,19 +73,21 @@ function plan(config) {
 
   const seatCount = aircraft.seatCount
   const paxCount = Math.max(1, Math.round(config.loadFactor * seatCount))
-  const doors = Math.max(1, (config.doors || []).length)
+  const doorCount = Math.max(1, (config.doors || []).length)
   const meanBags = weightedMean(config.bagWeights)
   const meanParty = weightedMean(config.partySizeWeights)
 
-  // Base service time per passenger, seconds of aisle occupancy.
-  const stow = meanBags > 0 ? config.stowBaseMean * Math.pow(Math.max(meanBags, 0.01), config.stowBagExponent) : 0
-  const shuffleRisk = (1 - ch.outsideIn) * (aircraft.maxDepth >= 3 ? 0.55 : 0.3)
-  const shuffle = shuffleRisk * (config.shuffleTime?.[1] ?? 9)
-  const binPenalty = 1 + config.binCongestionWeight * Math.min(1, (meanBags * paxCount) / (aircraft.rowCount * 2 * Math.max(1, config.binBagsPerRowSide)))
+  // Aisle-blocking time one passenger costs on average.
+  const stow = meanStowForBags(config, meanBags)
+  const blockRisk = (1 - ch.outsideIn) * (aircraft.maxDepth >= 3 ? 0.55 : 0.3)
+  const shuffle =
+    meanShuffle(config, 0) +
+    blockRisk * (aircraft.maxDepth >= 3 ? 0.5 * (meanShuffle(config, 1) + meanShuffle(config, 2)) : meanShuffle(config, 1))
+  const binFill = (meanBags * paxCount) / (aircraft.rowCount * 2 * Math.max(1, binCapacity(config, aircraft)))
+  const binPenalty = 1 + config.binCongestionWeight * Math.min(1, binFill) ** 2 + 0.35 * Math.max(0, binFill - 1)
   const service = (stow + shuffle) * binPenalty
 
-  // How much of the cabin can be serviced at once.
-  const doorFactor = 1 + 0.72 * (doors - 1)
+  const doorFactor = 1 + 0.72 * (doorCount - 1)
   const parallel = PARALLEL_BASE * doorFactor * ch.eff
   const friction =
     1 +
@@ -89,12 +96,16 @@ function plan(config) {
     (config.keepPartiesTogether ? 0.05 * (meanParty - 1) : 0) +
     0.25 * config.slowPaxRate * config.slowStowFactor
 
+  // Two competing constraints: how fast the gate can feed the door, and how
+  // fast the cabin can absorb people. The binding one dominates; the other
+  // still costs a little because they do not overlap perfectly.
+  const doorFloor = (paxCount * meanDoorInterval(config)) / doorFactor
+  const cabinWork = (paxCount * service * friction) / parallel
   const walkFloor = (aircraft.lengthM / Math.max(0.35, config.walkSpeedMean)) * 0.6
   const totalSeconds =
-    (walkFloor + (paxCount * service * friction) / parallel + (paxCount * config.gateScanMean * 0.12) / doorFactor) *
-    (0.94 + 0.12 * rnd())
+    (Math.max(doorFloor, cabinWork) + 0.25 * Math.min(doorFloor, cabinWork) + walkFloor) * (0.94 + 0.12 * rnd())
 
-  return { aircraft, rnd, ch, seatCount, paxCount, meanBags, meanParty, service, totalSeconds, doors }
+  return { aircraft, rnd, ch, seatCount, paxCount, meanBags, meanParty, service, totalSeconds, doorCount }
 }
 
 /**
@@ -110,9 +121,9 @@ export function runSimulation(config) {
   const aisleOccupancy = []
   for (let t = 0; t <= totalSeconds; t += sample) {
     const u = t / totalSeconds
-    const seated = Math.round(paxCount * Math.min(1, Math.pow(u, 1.35) * (1.06 - 0.06 * u)))
+    const seated = Math.round(paxCount * Math.min(1, u ** 1.35 * (1.06 - 0.06 * u)))
     seatedCurve.push({ t: Number(t.toFixed(1)), seated })
-    const bell = Math.exp(-Math.pow((u - 0.45) / 0.32, 2))
+    const bell = Math.exp(-(((u - 0.45) / 0.32) ** 2))
     aisleOccupancy.push({ t: Number(t.toFixed(1)), count: Math.round(bell * Math.min(26, paxCount / 6) + 0.5) })
   }
   if (seatedCurve.length) seatedCurve[seatedCurve.length - 1].seated = paxCount
@@ -122,13 +133,14 @@ export function runSimulation(config) {
     Array.from({ length: buckets }, (_, b) => {
       const rowU = r / Math.max(1, aircraft.rowCount - 1)
       const tU = b / (buckets - 1)
-      const wave = Math.exp(-Math.pow((tU - (0.15 + 0.7 * (1 - rowU))) / 0.22, 2))
+      const wave = Math.exp(-(((tU - (0.15 + 0.7 * (1 - rowU))) / 0.22) ** 2))
       return Number((wave * (1.2 + rnd() * 0.8)).toFixed(3))
     }),
   )
 
   const perPassenger = []
-  const shuffled = aircraft.seats.slice(0, paxCount)
+  const occupied = aircraft.seats.slice(0, paxCount)
+  const zeroBagShare = Number(config.bagWeights?.[0]) || 0
   let walk = 0
   let stowTot = 0
   let shuffleTot = 0
@@ -137,13 +149,14 @@ export function runSimulation(config) {
   let gateChecks = 0
   let binSearches = 0
 
-  shuffled.forEach((seat, i) => {
+  occupied.forEach((seat, i) => {
     const enterTime = (i / paxCount) * totalSeconds * 0.92
     const walkTime = seat.x / Math.max(0.3, config.walkSpeedMean)
-    const stowTime = rnd() < (config.bagWeights?.[0] ?? 0.2) ? 0 : config.stowBaseMean * (0.6 + rnd() * 0.9)
-    const blockers = seat.depth - 1 - Math.floor(rnd() * seat.depth * (p.ch.outsideIn > 0.7 ? 0.1 : 1))
-    const nBlock = Math.max(0, Math.min(2, blockers))
-    const shuffleTime = nBlock === 0 ? 0 : (config.shuffleTime?.[nBlock] ?? 9) * (0.7 + rnd() * 0.6)
+    const bags = rnd() < zeroBagShare ? 0 : rnd() < 0.5 ? 1 : 2
+    const stowTime = meanStowForBags(config, bags) * (0.6 + rnd() * 0.9)
+    const rawBlockers = seat.depth - 1 - Math.floor(rnd() * seat.depth * (p.ch.outsideIn > 0.7 ? 0.1 : 1))
+    const nBlock = Math.max(0, Math.min(2, rawBlockers))
+    const shuffleTime = meanShuffle(config, nBlock) * (0.7 + rnd() * 0.6)
     const blockedTime = rnd() * totalSeconds * 0.06
     const timeInAisle = walkTime + stowTime + shuffleTime + blockedTime
     if (nBlock === 0) interference.none += 1
@@ -163,9 +176,9 @@ export function runSimulation(config) {
       letter: seat.letter,
       depth: seat.depth,
       tier: 'standard',
-      groupLabel: `Group ${1 + (i % Math.max(1, config.zoneCount))}`,
+      groupLabel: `Group ${1 + (i % Math.max(1, config.zoneCount || 4))}`,
       doorId: (config.doors && config.doors[0]) || '1L',
-      bags: stowTime === 0 ? 0 : 1,
+      bags,
       party: Math.floor(i / 2),
       enterTime: Number(enterTime.toFixed(2)),
       sitTime: Number((enterTime + timeInAisle).toFixed(2)),
@@ -212,49 +225,97 @@ export function runSimulation(config) {
   }
 }
 
+/** Passenger state codes, matching the cabin renderer's STATE enum. */
+const STATE = { QUEUED: 0, WALKING: 1, STOWING: 2, SHUFFLING: 3, SEATED: 4 }
+
 /**
- * Mock Replay. Frame buffer sampled at 2 Hz.
+ * Mock Replay.
  *
- * ASSUMED SHAPE (documented in engineBridge.js): the cabin agent's real Replay
- * is expected to expose at least `{ result, dt, duration, frames }` where each
- * frame is `{ t, pax: [{ id, x, aisleIndex, state, seat }] }`. `frameAt(t)` is
- * provided as a convenience.
+ * SHAPE CONTRACT (owned by src/cabin, mirrored here so the fixture engine and
+ * the real one are interchangeable):
+ *
+ *   Replay {
+ *     aircraft, strategy, seed,
+ *     frameInterval: seconds per frame,
+ *     frameCount, duration,
+ *     passengers: [{ id, seatRow, seatLetter, seatX, seatDepth, lane, side,
+ *                    cabinId, tier, groupLabel, bags, party, doorId }],
+ *     frames: { state: Int8Array[], x: Float32Array[] },   // columnar, per frame
+ *     result: RunResult,
+ *   }
  */
 export function runReplay(config) {
   const result = runSimulation(config)
   const aircraft = resolveAircraft(config.aircraftId)
-  const frameDt = 0.5
-  const duration = result.totalSeconds
-  const frames = []
   const seatById = new Map(aircraft.seats.map((s) => [s.id, s]))
-  for (let t = 0; t <= duration + frameDt; t += frameDt) {
-    const pax = []
-    for (const p of result.perPassenger) {
-      const seat = seatById.get(p.seat)
-      if (t < p.enterTime - 30) {
-        pax.push({ id: p.id, x: -2, aisleIndex: seat?.aisleIndex ?? 0, state: 'QUEUED', seat: p.seat })
-      } else if (t < p.enterTime) {
-        pax.push({ id: p.id, x: -1.2 + 0.8 * ((t - p.enterTime + 30) / 30), aisleIndex: seat?.aisleIndex ?? 0, state: 'QUEUED', seat: p.seat })
-      } else if (t < p.sitTime - p.stowTime - p.shuffleTime) {
-        const u = (t - p.enterTime) / Math.max(0.1, p.walkTime + p.blockedTime)
-        pax.push({ id: p.id, x: (seat?.x ?? 0) * Math.min(1, u), aisleIndex: seat?.aisleIndex ?? 0, state: 'WALKING', seat: p.seat })
+  const frameInterval = 0.5
+  const duration = result.totalSeconds
+  const frameCount = Math.max(1, Math.ceil(duration / frameInterval) + 1)
+
+  const passengers = result.perPassenger.map((p) => {
+    const seat = seatById.get(p.seat)
+    return {
+      id: p.id,
+      seatRow: p.row,
+      seatLetter: p.letter,
+      seatX: seat?.x ?? 0,
+      seatDepth: p.depth,
+      lane: seat?.lane ?? 0,
+      side: seat?.side ?? -1,
+      cabinId: seat?.cabinId ?? 'economy',
+      tier: p.tier,
+      groupLabel: p.groupLabel,
+      bags: p.bags,
+      party: p.party,
+      doorId: p.doorId,
+    }
+  })
+
+  const doorX = (aircraft.doors.find((d) => (config.doors || []).includes(d.id)) || aircraft.doors[0])?.x ?? 0
+  const stateFrames = new Array(frameCount)
+  const xFrames = new Array(frameCount)
+
+  for (let f = 0; f < frameCount; f += 1) {
+    const t = f * frameInterval
+    const states = new Int8Array(passengers.length)
+    const xs = new Float32Array(passengers.length)
+    for (let i = 0; i < passengers.length; i += 1) {
+      const p = result.perPassenger[i]
+      const seatX = passengers[i].seatX
+      const walkEnd = p.sitTime - p.stowTime - p.shuffleTime
+      if (t < p.enterTime) {
+        // Compressed in the jet-bridge queue, just outside the door.
+        states[i] = STATE.QUEUED
+        xs[i] = doorX - 0.45 * Math.min(24, (p.enterTime - t) / 2.5)
+      } else if (t < walkEnd) {
+        states[i] = STATE.WALKING
+        const u = Math.min(1, (t - p.enterTime) / Math.max(0.1, walkEnd - p.enterTime))
+        xs[i] = doorX + (seatX - doorX) * u
+      } else if (t < p.sitTime - p.shuffleTime) {
+        states[i] = STATE.STOWING
+        xs[i] = seatX
       } else if (t < p.sitTime) {
-        pax.push({ id: p.id, x: seat?.x ?? 0, aisleIndex: seat?.aisleIndex ?? 0, state: t < p.sitTime - p.shuffleTime ? 'STOWING' : 'SHUFFLING', seat: p.seat })
+        states[i] = STATE.SHUFFLING
+        xs[i] = seatX
       } else {
-        pax.push({ id: p.id, x: seat?.x ?? 0, aisleIndex: seat?.aisleIndex ?? 0, state: 'SEATED', seat: p.seat })
+        states[i] = STATE.SEATED
+        xs[i] = seatX
       }
     }
-    frames.push({ t: Number(t.toFixed(2)), pax })
+    stateFrames[f] = states
+    xFrames[f] = xs
   }
+
   return {
-    result,
     aircraft,
-    dt: frameDt,
+    strategy: config.strategy,
+    seed: config.seed,
+    frameInterval,
+    frameCount,
     duration,
-    frames,
-    frameAt(t) {
-      return frames[Math.max(0, Math.min(frames.length - 1, Math.round(t / frameDt)))]
-    },
+    passengers,
+    frames: { state: stateFrames, x: xFrames },
+    result,
     isMock: true,
   }
 }
