@@ -79,7 +79,7 @@ dark. Follow the `dataviz` skill for palette and form.
 | 4 | **Aisle congestion heatmap** | Row × time matrix | Where do jams form, and when? |
 | 5 | **Time breakdown** | Stacked bar: walking / stowing / shuffling / blocked | *Why* is a strategy slow? |
 | 6 | **Seat interference counts** | Grouped bar by type (0 / 1 / 2 blockers) | Does outside-in really kill shuffles? |
-| 7 | **Load-factor sweep** | Line: boarding time vs % full, per strategy | Does the ranking hold on a half-empty flight? |
+| 7 | **Load-factor sweep** | Line: boarding time vs the swept parameter, per strategy | Does the ranking hold on a half-empty flight — or as status concentrates forward, or preboarding grows? |
 | 8 | **Passenger wait time** | Box plot / violin of individual time-to-seat | Is the fast strategy also the pleasant one? |
 | 9 | **Time-to-seat by seat position** | Seat-map heatmap | Who suffers — window? rear? |
 | 10 | **Convergence** | Running mean ± CI vs replication count | Have we run enough replications to trust this? |
@@ -96,12 +96,16 @@ the first result arrives.
 Collapsible sections, every control showing its live value and a one-line
 explanation of what it does physically.
 
-1. **Scenario** — aircraft, strategy, load factor, seed (+ randomise), replications
+1. **Scenario** — aircraft, strategy, load factor, seed (+ randomise),
+   replications, and the parameter sweep that feeds chart 7: on/off, which
+   parameter it varies, which points, how many replications per point
 2. **Doors** — per-door toggles, door-assignment rule
 3. **Passengers** — bag mix, party-size mix, walk speed mean/sd, % preboards,
-   % reduced mobility, % travelling with children, elite mix
-4. **Timing** — stow mean/CV, bag-count exponent, shuffle times (1 and 2
-   blockers), same-party shuffle, gate-scan mean/sd, per-person variability
+   % reduced mobility, % travelling with children, elite mix, and how far
+   forward status sits (`eliteForwardBias`)
+4. **Timing** — stow time and its spread, per-person dexterity, elementary
+   shuffle movements and their duration, same-party shuffle, door-arrival
+   interval, and the squeeze-past speed factor (0 = strict aisle blocking)
 5. **Overhead bins** — bags per row-side, search radius, search penalty,
    gate-check penalty, congestion weight
 6. **Behaviour** — zone count, keep parties together, preboard first,
@@ -111,17 +115,27 @@ explanation of what it does physically.
 
 ### 3.1 Presets
 
-Named, realistic, one click each:
+Named, realistic, one click each. The airframe ids are the roster's own
+(`parity/aircraft.json`); a preset may not name one that is not in it.
 
-- **US legacy hub, full flight** — A320neo, 5-tier priority, 98% load, 1 door
-- **European LCC turnaround** — 737-8200, front+rear airstairs, 96% load,
-  high non-compliance, small bins
-- **Regional commuter** — E175, back-to-front, 88% load, heavy gate-checking
-- **Long-haul widebody** — 777-300ER, twin aisle, 2 doors, 92% load, heavy bags
-- **Southwest legacy open seating** — 737-800, open seating, 95% load
-- **Steffen's laboratory ideal** — perfect Steffen, no parties, no preboards
-- **The nightmare** — front-to-back, 100% load, 2 bags each, tiny bins,
-  high non-compliance
+- **US legacy hub, full flight** — `a320neo`, 5-tier priority, 98% load, 1 door
+- **European LCC turnaround** — `b737_max8` (the 197-seat MAX 8-200),
+  front+rear airstairs, 96% load, high non-compliance, small bins
+- **Regional commuter** — `e175`, back-to-front, 88% load, heavy gate-checking
+- **Long-haul widebody** — `b777_300er`, twin aisle, 2 doors, 92% load,
+  heavy bags
+- **Southwest, pre-2026 (open seating)** — `b737_max8`, open seating, 95% load,
+  1 door. Historical: retired 27 January 2026.
+- **Southwest, today (assigned + WilMA)** — `b737_max8`, `southwest_2026`,
+  95% load, 1 door. Deliberately identical to the preset above in every respect
+  but the scheme, so running one after the other measures what Southwest's
+  change to assigned seating actually bought. There is no 175-seat Southwest
+  737 in the roster (see RESEARCH_AIRCRAFT B3b); both presets use the roster's
+  only 737, which is denser than Southwest's.
+- **Steffen's laboratory ideal** — `a320neo`, perfect Steffen, no parties,
+  no preboards
+- **The nightmare** — `a320neo`, front-to-back, 100% load, 2 bags each,
+  tiny bins, high non-compliance
 
 ---
 

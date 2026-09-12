@@ -11,7 +11,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { deepEqual, makeConfigReducer, pickKnown, sanitizeConfig } from './configReducer.js'
 import { aircraftDefaultConfig, airframeChanges, buildDefaultConfig, effectiveDefaults } from './configDefaults.js'
-import { sweepSpecFor } from './sweep.js'
+import { specValues, sweepSpecFor } from './sweep.js'
 import { labelForKey } from '../app/controlSchema.js'
 import { readHashConfig, syncHash } from '../lib/urlConfig.js'
 import { PRESET_BY_ID } from '../app/presets.js'
@@ -245,8 +245,8 @@ export function StoreProvider({ engine, children }) {
       // Chart 7 only gets data if somebody asks for it. The sweep is part of
       // the same job list, so it is part of the total the progress bar divides
       // by — otherwise the bar sits at 100% for the whole second axis.
-      const sweep = options?.sweep === undefined ? sweepSpecFor(config, mode) : options.sweep
-      const sweepTotal = sweep ? list.length * sweep.loadFactors.length * sweep.runs : 0
+      const sweep = options?.sweep === undefined ? sweepSpecFor(config, mode, engine.SWEEPABLE) : options.sweep
+      const sweepTotal = sweep ? list.length * specValues(sweep).length * sweep.runs : 0
       setBatch({ running: true, done: 0, total: list.length * config.runs + sweepTotal, result: null, error: null })
       batchHandle.current = startBatch({
         engine,

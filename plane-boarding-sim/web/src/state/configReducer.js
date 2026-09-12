@@ -18,7 +18,7 @@
  */
 import { deepEqual } from './deepEqual.js'
 import { airframeChanges, defaultDoorsFor, effectiveDefaults } from './configDefaults.js'
-import { sanitizeLoadFactors } from './sweep.js'
+import { DEFAULT_SWEEP_PARAM, sanitizeLoadFactors, sanitizeSweepValues, sweepAxis } from './sweep.js'
 
 // Re-exported so the long-standing `state/configReducer.js` import site keeps
 // working; the implementation moved to lib/ to keep the defaults layering,
@@ -111,6 +111,19 @@ export function sanitizeConfig(config, aircraft, defaults) {
   if (defaults && Object.prototype.hasOwnProperty.call(defaults, 'sweepLoadFactors')) {
     next.sweepLoadFactors = sanitizeLoadFactors(next.sweepLoadFactors, defaults.sweepLoadFactors)
   }
+  if (defaults && Object.prototype.hasOwnProperty.call(defaults, 'sweepValues')) {
+    // Only the axis in force can be checked: `sweepValues` left over from
+    // another axis is inert, and snapping it to this one's grid would silently
+    // rewrite points the user chose there. Empty means "this axis's defaults".
+    const param = next.sweepParam || DEFAULT_SWEEP_PARAM
+    const stored = next.sweepValues
+    next.sweepValues =
+      param !== DEFAULT_SWEEP_PARAM && Array.isArray(stored) && stored.length
+        ? sanitizeSweepValues(param, stored, sweepAxis(param).defaults)
+        : Array.isArray(stored)
+          ? stored
+          : []
+  }
   if (next.sweepRuns != null) next.sweepRuns = Math.max(1, Math.round(Number(next.sweepRuns) || 1))
   return next
 }
@@ -133,6 +146,14 @@ export function makeConfigReducer(defaults) {
           return sanitizeConfig(next, action.aircraft, defaults)
         }
         if (action.field === 'doors') return sanitizeConfig(next, action.aircraft, defaults)
+        // A new sweep axis has different points; adopt its own, because the
+        // previous axis's values are meaningless on it (0.9 is a sensible load
+        // factor and a nonsense zone count).
+        if (action.field === 'sweepParam') {
+          next.sweepValues =
+            action.value === DEFAULT_SWEEP_PARAM ? [] : [...sweepAxis(action.value).defaults]
+          return sanitizeConfig(next, action.aircraft, defaults)
+        }
         return next
       }
 

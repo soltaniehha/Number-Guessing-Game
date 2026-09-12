@@ -7,7 +7,7 @@
  * lab instrument and a form.
  *
  * kind: 'slider' | 'nullable-slider' | 'toggle' | 'segmented' | 'weights' | 'seed'
- *     | 'aircraft' | 'strategy' | 'doors' | 'load-factors'
+ *     | 'aircraft' | 'strategy' | 'doors' | 'sweep-param' | 'sweep-points'
  *
  * Two optional properties gate a control:
  *   `shell`  — a shell parameter (replications, the sweep), not an engine one,
@@ -16,7 +16,7 @@
  *              to feed chart 7, so it is offered in Analytics and Compare and
  *              nowhere else.
  */
-import { SWEEP_MODES, SWEEP_POINTS, autoSweepRuns } from '../state/sweep.js'
+import { SWEEP_MODES, autoSweepRuns } from '../state/sweep.js'
 
 export const SECTIONS = [
   { id: 'scenario', title: 'Scenario', hint: 'What is being boarded, and how' },
@@ -112,20 +112,34 @@ export const CONTROLS = [
     section: 'scenario',
     shell: true,
     modes: SWEEP_MODES,
-    // Worded to match chart 7's own empty state, which tells the reader to
-    // "enable Sweep load factor in the Scenario section".
-    label: 'Sweep load factor',
-    explain: 'Also re-run every strategy across a range of load factors, to fill the load-factor sweep chart. It multiplies the work, so it is off by default.',
+    // Named for the chart it fills, which titles itself "Load-factor sweep"
+    // and, in its empty state, sends the reader to the Scenario section to
+    // switch this on. Load factor is the default axis; the picker below
+    // changes it.
+    label: 'Load-factor sweep',
+    explain: 'Also re-run every strategy across a range of one scenario parameter — load factor unless you change the axis below — to fill the sweep chart. It multiplies the work, so it is off by default.',
   },
   {
-    key: 'sweepLoadFactors',
-    kind: 'load-factors',
+    key: 'sweepParam',
+    kind: 'sweep-param',
     section: 'scenario',
     shell: true,
     modes: SWEEP_MODES,
-    points: SWEEP_POINTS,
+    label: 'Sweep axis',
+    explain: 'Which scenario parameter the sweep varies. Load factor asks whether a ranking survives a half-empty Tuesday; forward concentration of status turns “does selling priority boarding cost time?” into a curve.',
+  },
+  {
+    // A virtual key: the points live in `sweepLoadFactors` for the load-factor
+    // axis and in `sweepValues` for every other, so that switching axis and
+    // switching back does not lose the load factors you picked. ControlPanel
+    // resolves which one this control is writing to.
+    key: 'sweepPoints',
+    kind: 'sweep-points',
+    section: 'scenario',
+    shell: true,
+    modes: SWEEP_MODES,
     label: 'Sweep points',
-    explain: 'How full the aircraft is at each point on the sweep. Each point is a fresh set of replications.',
+    explain: 'The values of the swept parameter to run. Each point is a fresh set of replications, so the cost is one batch per point.',
   },
   {
     key: 'sweepRuns',
@@ -283,6 +297,21 @@ export const CONTROLS = [
     },
     explain: 'Frequent-flyer tiers in the main cabin. Revenue-driven strategies board these in order.',
   },
+  {
+    key: 'eliteForwardBias',
+    kind: 'slider',
+    section: 'passengers',
+    label: 'Status sits forward',
+    min: 0,
+    max: 1,
+    step: 0.05,
+    format: fixed2,
+    announce: sayOf('of forward tilt on the status mix'),
+    // The physical claim, not the arithmetic: elites hold the extra-legroom
+    // rows at the front of economy, so calling them first is calling the front
+    // of the aircraft first. ENGINE_SPEC section 3.1 step 6.
+    explain: 'How strongly frequent flyers cluster in the forward rows — Comfort+, Economy Plus, Main Cabin Extra. At 0 status is spread evenly down the cabin; at 1 the nose is roughly twice as elite as average and the tail has almost none, which is what makes boarding by status a front-to-back boarding in disguise.',
+  },
 
   // ------------------------------------------------------------------ timing
   // Two parameterisations of the service-time model exist: the one written up
@@ -360,6 +389,21 @@ export const CONTROLS = [
     format: fixed2,
     announce: sayOf('of the mean, per person'),
     explain: 'How much people differ from each other in handling luggage \u2014 some are simply quicker every time.',
+  },
+  {
+    key: 'stowPassSpeedFactor',
+    kind: 'slider',
+    section: 'timing',
+    label: 'Squeeze past a stower',
+    min: 0,
+    max: 1,
+    step: 0.05,
+    format: fixed2,
+    announce: sayOf('times normal walking pace, or zero for a closed aisle'),
+    // The single most consequential parameter in the model: it is what makes
+    // the absolute boarding time land on the field regression, and it is what
+    // compresses the gaps between strategies. RESEARCH_PARAMETERS 12.3.
+    explain: 'How fast one person at a time may edge past someone loading a bin, as a fraction of walking pace. Set it to 0 for strict aisle blocking (Schultz-comparable): a stowing passenger then closes the aisle outright, which widens every strategy’s advantage but overshoots real single-door boarding times by about half.',
   },
   {
     key: 'shuffleMoveMode',

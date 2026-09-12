@@ -1,4 +1,4 @@
-.PHONY: help install test test-py test-js parity lint dev build clean demo
+.PHONY: help install test test-py test-js parity lint dev build clean demo sweep
 
 help:
 	@echo "Boarding Lab — airplane boarding simulator"
@@ -11,7 +11,8 @@ help:
 	@echo "  make lint       ESLint the web app"
 	@echo "  make dev        Start the web app on http://localhost:5173"
 	@echo "  make build      Production build of the web app"
-	@echo "  make demo       Run the CLI benchmark across all strategies"
+	@echo "  make demo       Rank all 16 strategies on an A320neo through one door"
+	@echo "  make sweep      Boarding time vs how far forward status sits"
 
 install:
 	cd web && npm install --no-audit --no-fund
@@ -39,8 +40,15 @@ dev:
 build:
 	cd web && npm run build
 
+# Single door, because that is the configuration the field regression the model
+# is calibrated against describes, and the one the README quotes.
 demo:
-	cd python && python3 -m plane_boarding.cli compare --aircraft a320neo --runs 30
+	cd python && python3 -m plane_boarding.cli compare --aircraft a320neo --doors 1L --runs 40
+
+# The sweep that turns "does selling priority boarding cost time?" into a curve.
+sweep:
+	cd python && python3 -m plane_boarding.cli sweep --param eliteForwardBias \
+		--aircraft a320neo --doors 1L --strategies priority_5tier random --runs 20
 
 clean:
 	rm -rf web/dist web/node_modules python/**/__pycache__ python/.pytest_cache

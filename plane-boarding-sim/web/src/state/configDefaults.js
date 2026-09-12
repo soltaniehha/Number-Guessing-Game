@@ -10,17 +10,26 @@
  */
 
 import { deepEqual } from './deepEqual.js'
-import { DEFAULT_SWEEP_LOAD_FACTORS } from './sweep.js'
+import { DEFAULT_SWEEP_LOAD_FACTORS, DEFAULT_SWEEP_PARAM } from './sweep.js'
 
 export const SHELL_DEFAULTS = {
   aircraftId: 'a320neo',
   strategy: 'priority_5tier',
   seed: 20260101,
   runs: 200,
-  // The load-factor sweep (chart 7). Opt-in: it multiplies the batch by the
+  // The parameter sweep (chart 7). Opt-in: it multiplies the batch by the
   // number of points. See state/sweep.js.
   sweepEnabled: false,
+  // Which scenario parameter the sweep varies. The engine's SWEEPABLE map is
+  // the authority on what is legal; load factor is the axis the spec names.
+  sweepParam: DEFAULT_SWEEP_PARAM,
+  // Load factor keeps its own point list, so switching axis and back does not
+  // lose it. Every other axis shares `sweepValues`.
   sweepLoadFactors: [...DEFAULT_SWEEP_LOAD_FACTORS],
+  // Empty = whatever the chosen axis offers as its own starting points. An
+  // ARRAY rather than null on purpose: `coerceToSchema` reads a null default
+  // as "nullable number" and would coerce a list of points into one.
+  sweepValues: [],
   // null = derive from `runs`, the way the worker does.
   sweepRuns: null,
   compareStrategies: [

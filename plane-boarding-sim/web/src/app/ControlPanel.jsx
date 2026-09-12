@@ -4,7 +4,17 @@
  */
 import { useStore } from '../state/StoreProvider.jsx'
 import { relevanceOf, optionRelevance } from '../state/relevance.js'
-import { describeBatchCost, describeSweepCost, runCounts, sweepSpecFor } from '../state/sweep.js'
+import {
+  describeBatchCost,
+  describeSweepCost,
+  runCounts,
+  sweepAxesFor,
+  sweepAxis,
+  sweepParamOf,
+  sweepPointsOf,
+  sweepSpecFor,
+  sweepValuesKey,
+} from '../state/sweep.js'
 import { SECTIONS, autoValueOf, presentControls, rootKey } from './controlSchema.js'
 import { getPath, setPath } from '../lib/path.js'
 import { Section } from './Section.jsx'
@@ -16,7 +26,8 @@ import { WeightSet } from './controls/WeightSet.jsx'
 import { SeedField } from './controls/SeedField.jsx'
 import { DoorPicker } from './controls/DoorPicker.jsx'
 import { AircraftPicker } from './controls/AircraftPicker.jsx'
-import { LoadFactorSet } from './controls/LoadFactorSet.jsx'
+import { SweepPointSet } from './controls/SweepPointSet.jsx'
+import { SweepParamPicker } from './controls/SweepParamPicker.jsx'
 import { StrategyPicker } from './controls/StrategyPicker.jsx'
 import { PresetSection } from './PresetSection.jsx'
 
@@ -87,9 +98,9 @@ function sectionBadge(sectionId, config, aircraft) {
  * spelled out rather than discovered halfway through a five-minute run.
  */
 function RunCost({ store }) {
-  const { config, mode } = store
+  const { config, mode, engine } = store
   const list = mode === 'compare' ? config.compareStrategies || [] : [config.strategy]
-  const sweep = sweepSpecFor(config, mode)
+  const sweep = sweepSpecFor(config, mode, engine?.SWEEPABLE)
   const counts = runCounts({ strategies: list.length, runs: config.runs, sweep })
   return (
     <div className="runcost" role="note" aria-label="Run size">
@@ -115,7 +126,8 @@ function AirframeNote({ note, controlKey }) {
 }
 
 function Control({ control, store }) {
-  const { config, aircraft, setField, toggleDoor, randomiseSeed, strategies, aircraftList, airframeNote } = store
+  const { config, aircraft, engine, setField, toggleDoor, randomiseSeed, strategies, aircraftList, airframeNote } =
+    store
   const id = `ctl-${control.key.replace(/\./g, '-')}`
   const value = getPath(config, control.key)
   const { relevant, reason } = relevanceOf(control.key, config, aircraft)
@@ -226,19 +238,40 @@ function Control({ control, store }) {
         </>
       )
 
-    case 'load-factors':
+    // The sweep axis, and the points on it. Both read the engine's SWEEPABLE
+    // map rather than a list of their own, and the points are written to
+    // whichever config key that axis owns (state/sweep.js `sweepValuesKey`).
+    case 'sweep-param':
       return (
-        <LoadFactorSet
+        <SweepParamPicker
           id={id}
           label={control.label}
           explain={control.explain}
-          value={value}
-          points={control.points}
+          value={sweepParamOf(config, engine?.SWEEPABLE)}
+          axes={sweepAxesFor(engine?.SWEEPABLE)}
           disabled={disabled}
           reason={reason}
-          onChange={commit}
+          onChange={(v) => setField('sweepParam', v)}
         />
       )
+
+    case 'sweep-points': {
+      const param = sweepParamOf(config, engine?.SWEEPABLE)
+      const axis = sweepAxis(param)
+      return (
+        <SweepPointSet
+          id={id}
+          label={control.label}
+          explain={control.explain}
+          value={sweepPointsOf(config, engine?.SWEEPABLE)}
+          points={axis.points}
+          format={axis.format}
+          disabled={disabled}
+          reason={reason}
+          onChange={(next) => setField(sweepValuesKey(param), next)}
+        />
+      )
+    }
 
     case 'nullable-slider':
       return (

@@ -95,6 +95,13 @@ export const STRATEGIES = {
     description:
       'The best boarding you could actually sell: premium cabin stays first, then five printable groups that quantise the reverse pyramid — rear windows, front windows plus rear middles, and so on. Elites board at the front of their group, not ahead of everyone.',
   },
+  southwest_2026: {
+    key: 'southwest_2026',
+    name: 'Southwest 2026 (WilMA × zones + status, 8 groups)',
+    family: 'commercial',
+    description:
+      'The real converged design: Southwest replaced 53 years of open seating on 27 January 2026 with window/middle/aisle boarded rear-to-front, merged with fare and Rapid Rewards status into eight numbered groups. Live on roughly 4,000 flights a day, which makes it the benchmark any proposal has to beat.',
+  },
   by_bags: {
     key: 'by_bags',
     name: 'Bag-count boarding',

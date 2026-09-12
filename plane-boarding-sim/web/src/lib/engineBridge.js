@@ -18,8 +18,8 @@
  * `?engine=mock` on the URL or `localStorage.boardingLab.engine = 'mock'`.
  *
  * Expected engine surface (docs/ENGINE_SPEC.md):
- *   AIRCRAFT, STRATEGIES, DEFAULTS, runSimulation(config), runReplay(config),
- *   resolveAircraft(id)
+ *   AIRCRAFT, STRATEGIES, DEFAULTS, SWEEPABLE, runSimulation(config),
+ *   runReplay(config), resolveAircraft(id)
  *
  * Expected Replay surface (assumed, since it is defined by src/cabin):
  *   { result: RunResult, duration: number, dt: number, frames: Frame[] }
@@ -71,7 +71,7 @@ let enginePromise = null
 /**
  * Resolve the engine module: the real one when it exists, otherwise the
  * fixture engine in `src/app/__fixtures__`.
- * @returns {Promise<{AIRCRAFT, STRATEGIES, DEFAULTS, runSimulation, runReplay, resolveAircraft, isMock: boolean}>}
+ * @returns {Promise<{AIRCRAFT, STRATEGIES, DEFAULTS, SWEEPABLE, runSimulation, runReplay, resolveAircraft, isMock: boolean}>}
  */
 export function loadEngine() {
   if (enginePromise) return enginePromise
@@ -89,6 +89,9 @@ function normaliseEngine(mod, isMock) {
     AIRCRAFT,
     STRATEGIES: mod.STRATEGIES || {},
     DEFAULTS: mod.DEFAULTS || {},
+    // The engine decides which scenario parameters may be swept; the panel
+    // offers exactly these and the worker rejects anything else.
+    SWEEPABLE: mod.SWEEPABLE || {},
     runSimulation: mod.runSimulation,
     runReplay: mod.runReplay || mod.runSimulation,
     resolveAircraft,

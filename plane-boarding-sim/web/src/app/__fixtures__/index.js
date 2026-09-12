@@ -5,4 +5,4 @@
 export { AIRCRAFT, resolveAircraft } from './aircraft.js'
 export { STRATEGIES, STRATEGY_FAMILIES } from './strategies.js'
 export { runSimulation, runReplay } from './mockEngine.js'
-export { ENGINE_DEFAULTS as DEFAULTS } from './defaults.js'
+export { ENGINE_DEFAULTS as DEFAULTS, SWEEPABLE } from './defaults.js'

@@ -191,8 +191,12 @@ export function runSimulation(config) {
     })
   })
 
+  // Two different questions, per ENGINE_SPEC section 7: `waits` is door to
+  // seat, `sits` is doors-open to seat with the jetbridge queue included.
   const waits = perPassenger.map((x) => x.timeInAisle).sort((a, b) => a - b)
+  const sits = perPassenger.map((x) => x.sitTime).sort((a, b) => a - b)
   const q = (f) => waits[Math.min(waits.length - 1, Math.floor(f * waits.length))] ?? 0
+  const qSit = (f) => sits[Math.min(sits.length - 1, Math.floor(f * sits.length))] ?? 0
 
   return {
     totalSeconds: Number(totalSeconds.toFixed(2)),
@@ -217,6 +221,13 @@ export function runSimulation(config) {
     gateChecks,
     binSearches,
     aisleBlockEvents: Math.round(paxCount * 0.6),
+    p50AisleSeconds: Number(q(0.5).toFixed(2)),
+    p90AisleSeconds: Number(q(0.9).toFixed(2)),
+    maxAisleSeconds: Number((waits[waits.length - 1] ?? 0).toFixed(2)),
+    p50BoardingWaitSeconds: Number(qSit(0.5).toFixed(2)),
+    p90BoardingWaitSeconds: Number(qSit(0.9).toFixed(2)),
+    // Deprecated aliases of the aisle trio, kept because the real engine keeps
+    // them (ENGINE_SPEC section 7). Nothing in the app should read these.
     p50TimeToSeat: Number(q(0.5).toFixed(2)),
     p90TimeToSeat: Number(q(0.9).toFixed(2)),
     maxTimeToSeat: Number((waits[waits.length - 1] ?? 0).toFixed(2)),

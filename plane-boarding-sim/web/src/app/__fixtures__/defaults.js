@@ -12,9 +12,9 @@ export const ENGINE_DEFAULTS = {
     "loadFactor": 0.92,
     "doorAssignment": "split_by_row",
     "bagWeights": {
-      0: 0.1,
-      1: 0.42,
-      2: 0.48
+      0: 0.2,
+      1: 0.6,
+      2: 0.2
     },
     "partySizeWeights": {
       1: 0.52,
@@ -37,6 +37,7 @@ export const ENGINE_DEFAULTS = {
       "standard": 0.55,
       "basic": 0.15
     },
+    "eliteForwardBias": 1.0,
     "stowWeibullShape": 1.7,
     "stowWeibullScale": 16.0,
     "stowVariability": 0.28,
@@ -50,6 +51,7 @@ export const ENGINE_DEFAULTS = {
       "both": 9
     },
     "shuffleSamePartyMovements": 2,
+    "stowPassSpeedFactor": 0.4,
     "doorArrivalMean": 3.7,
     "binBagsPerRowSide": null,
     "binSearchRadius": 3,
@@ -62,7 +64,24 @@ export const ENGINE_DEFAULTS = {
     "nonComplianceRate": 0.15,
     "complianceJitter": 6,
     "lateRate": 0.01,
-    "openSeatingPolicy": "aisle_first",
+    "openSeatingPolicy": "avoid_neighbours",
     "dt": 0.1,
     "sampleInterval": 2.0
   }
+
+/**
+ * The scenario parameters a sweep may vary, mirroring `SWEEPABLE` in
+ * `src/sim/batch.js` (and `plane_boarding/batch.py`). The panel's sweep-axis
+ * picker renders straight off this, so the fixture engine offers the same
+ * axes the real one does.
+ */
+export const SWEEPABLE = {
+  loadFactor: 'seat load factor',
+  preboardRate: 'preboarding fraction of the cabin',
+  nonComplianceRate: 'fraction ignoring their called group',
+  lateRate: 'fraction arriving late',
+  stowPassSpeedFactor: 'squeeze-past speed fraction',
+  binCongestionWeight: 'bin-congestion stow penalty',
+  eliteForwardBias: 'forward concentration of status',
+  zoneCount: 'number of boarding zones',
+}

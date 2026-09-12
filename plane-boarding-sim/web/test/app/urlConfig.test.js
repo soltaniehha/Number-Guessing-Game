@@ -31,11 +31,12 @@ describe('url encoding', () => {
       value: { 0: 0.5, 1: 0.25, 2: 0.25 },
       aircraft: a320,
     })
-    config = reducer(config, { type: 'SET_FIELD', field: 'openSeatingPolicy', value: 'avoid_neighbours', aircraft: a320 })
+    // A non-default enum, so it actually appears in the encoded diff.
+    config = reducer(config, { type: 'SET_FIELD', field: 'openSeatingPolicy', value: 'window_first', aircraft: a320 })
 
     const decoded = decodeConfig(`#${encodeConfig(config, defaults)}`)
     expect(decoded.bagWeights).toEqual({ 0: 0.5, 1: 0.25, 2: 0.25 })
-    expect(decoded.openSeatingPolicy).toBe('avoid_neighbours')
+    expect(decoded.openSeatingPolicy).toBe('window_first')
     expect(reducer(defaults, { type: 'LOAD_CONFIG', config: decoded, aircraft: a320 })).toEqual(config)
   })
 

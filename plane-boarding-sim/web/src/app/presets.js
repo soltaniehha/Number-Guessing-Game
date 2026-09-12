@@ -1,5 +1,5 @@
 /**
- * The seven named scenarios of UI_SPEC section 3.1.
+ * The eight named scenarios of UI_SPEC section 3.1.
  *
  * A preset is a *patch*: applying it means "defaults, then these values", so a
  * preset never silently inherits whatever you were fiddling with. Each carries
@@ -80,10 +80,16 @@ export const PRESETS = [
       childRate: 0.24,
     },
   },
+  // The two Southwest presets are a matched pair, and that is the point of
+  // them: same airframe, same door, same load, same passengers -- only the
+  // boarding scheme differs. Southwest ended 53 years of open seating on
+  // 27 January 2026 and, given a blank sheet, chose window/middle/aisle boarded
+  // rear-to-front with fare and status merged into eight groups. Running one
+  // after the other measures what that change actually bought.
   {
-    id: 'southwest_open',
-    name: 'Southwest legacy open seating',
-    blurb: 'No assigned seats at all: board in check-in order and grab the first aisle you like.',
+    id: 'southwest_pre2026',
+    name: 'Southwest, pre-2026 (open seating)',
+    blurb: 'Historical: no assigned seats at all. Board in check-in order and take the first aisle you like. Retired 27 January 2026 after 53 years.',
     patch: {
       aircraftId: 'b737_max8',
       strategy: 'open_seating',
@@ -92,6 +98,19 @@ export const PRESETS = [
       doorAssignment: 'single',
       openSeatingPolicy: 'aisle_first',
       keepPartiesTogether: true,
+    },
+  },
+  {
+    id: 'southwest_2026',
+    name: 'Southwest, today (assigned + WilMA)',
+    blurb: 'The replacement, live since 27 January 2026 on ~4,000 flights a day: window → middle → aisle, rear to front, merged with fare and status into eight groups. Same aircraft as the preset above — run both.',
+    patch: {
+      aircraftId: 'b737_max8',
+      strategy: 'southwest_2026',
+      loadFactor: 0.95,
+      doors: ['1L'],
+      doorAssignment: 'single',
+      zoneCount: 4,
     },
   },
   {

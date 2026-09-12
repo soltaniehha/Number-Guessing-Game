@@ -103,8 +103,16 @@ function CabinPlaceholder({ replay }) {
         <Readout label="Passengers" value={fmtInt(result.paxCount)} />
         <Readout label="Throughput" value={`${fmtNum(result.throughputPaxPerMin, 1)}/min`} />
         <Readout label="Gate checks" value={fmtInt(result.gateChecks)} />
-        <Readout label="Median time to seat" value={fmtClock(result.p50TimeToSeat)} />
-        <Readout label="Worst time to seat" value={fmtClock(result.maxTimeToSeat)} />
+        {/*
+          Two different questions, and the field names now say which is which
+          (ENGINE_SPEC section 7). `*AisleSeconds` is door to seat;
+          `*BoardingWaitSeconds` is doors-open to seat, jetbridge queue and all.
+          The old `p50/maxTimeToSeat` keys are deprecated aliases of the aisle
+          trio and are not read here.
+        */}
+        <Readout label="Door to seat (median)" value={fmtClock(result.p50AisleSeconds)} />
+        <Readout label="Door to seat (worst)" value={fmtClock(result.maxAisleSeconds)} />
+        <Readout label="Doors open to seat (median)" value={fmtClock(result.p50BoardingWaitSeconds)} />
       </div>
       {counts && (
         <div className="statelane" aria-label="Passenger states at the current time">

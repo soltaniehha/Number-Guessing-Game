@@ -49,13 +49,13 @@ function CabinStatus() {
 }
 
 function BatchStatus() {
-  const { batch, config, mode } = useStore()
+  const { batch, config, mode, engine } = useStore()
   // Before a run starts there is no batch to measure, so show the size of the
   // run the Run button would start — sweep included, or the bar would jump.
   const planned = runCounts({
     strategies: mode === 'compare' ? (config.compareStrategies || []).length : 1,
     runs: config.runs,
-    sweep: sweepSpecFor(config, mode),
+    sweep: sweepSpecFor(config, mode, engine?.SWEEPABLE),
   }).total
   const total = batch.total || planned
   const frac = total > 0 ? batch.done / total : 0

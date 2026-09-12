@@ -13,8 +13,8 @@ const apply = (preset) =>
   })
 
 describe('presets', () => {
-  it('ships the seven scenarios from the spec, each with a description', () => {
-    expect(PRESETS).toHaveLength(7)
+  it('ships the eight scenarios from the spec, each with a description', () => {
+    expect(PRESETS).toHaveLength(8)
     for (const p of PRESETS) {
       expect(p.name.length).toBeGreaterThan(3)
       expect(p.blurb.length).toBeGreaterThan(20)
@@ -65,5 +65,17 @@ describe('presets', () => {
       const config = apply(p)
       expect(config).not.toEqual(defaults)
     }
+  })
+
+  it('offers Southwest twice — the retired scheme and the live one — on one airframe', () => {
+    const then = PRESET_BY_ID.southwest_pre2026
+    const now = PRESET_BY_ID.southwest_2026
+    expect(then.patch.strategy).toBe('open_seating')
+    expect(now.patch.strategy).toBe('southwest_2026')
+    // Only the scheme may differ, or the comparison measures the wrong thing.
+    for (const key of ['aircraftId', 'loadFactor', 'doorAssignment']) {
+      expect(now.patch[key]).toEqual(then.patch[key])
+    }
+    expect(now.patch.doors).toEqual(then.patch.doors)
   })
 })

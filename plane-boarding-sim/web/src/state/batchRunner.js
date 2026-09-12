@@ -7,7 +7,7 @@
  *
  * Worker protocol (per the agreed interface):
  *   post   {type:'start', config, strategies:[...], runs:N,
- *           sweep?:{loadFactors:[...], runs:N}}
+ *           sweep?:{param:'loadFactor', values:[...], loadFactors:[...], runs:N}}
  *   recv   {type:'progress', done, total, partial:BatchResult}
  *          {type:'done', result:BatchResult}
  *          {type:'error', message}
@@ -17,7 +17,7 @@
  */
 import { createBatchWorker } from '../lib/engineBridge.js'
 import { aggregateBatch } from './aggregate.js'
-import { autoSweepRuns } from './sweep.js'
+import { DEFAULT_SWEEP_PARAM, autoSweepRuns, specValues } from './sweep.js'
 
 /**
  * Start a batch. Returns a handle with `stop()`.
@@ -27,9 +27,12 @@ import { autoSweepRuns } from './sweep.js'
  * @param {object} opts.config   SimConfig
  * @param {string[]} opts.strategies
  * @param {number} opts.runs     replications per strategy
- * @param {?{loadFactors:number[], runs:number}} [opts.sweep] load-factor sweep
- *        (chart 7). `runs` is the replications PER POINT and is always
+ * @param {?{param:string, values:number[], runs:number}} [opts.sweep] parameter
+ *        sweep (chart 7). `runs` is the replications PER POINT and is always
  *        explicit here, so the count the panel showed is the count that runs.
+ *        `values` may also arrive as `loadFactors`, which is what the axis was
+ *        called when it was the only one; both are sent on, so a consumer
+ *        written against either name keeps working.
  * @param {object} [opts.names]  STRATEGIES metadata, so series carry real names
  * @param {(e:{done:number,total:number,partial:object})=>void} opts.onProgress
  * @param {(result:object)=>void} opts.onDone
@@ -37,9 +40,11 @@ import { autoSweepRuns } from './sweep.js'
  */
 export function startBatch({ engine, config, strategies, runs, sweep, names, onProgress, onDone, onError }) {
   const list = strategies && strategies.length ? strategies : [config.strategy]
-  const spec = sweep && Array.isArray(sweep.loadFactors) && sweep.loadFactors.length ? sweep : null
+  const spec = sweep && specValues(sweep).length ? sweep : null
+  const points = specValues(spec)
+  const param = spec?.param || DEFAULT_SWEEP_PARAM
   const sweepRuns = spec ? Math.max(1, Math.trunc(spec.runs ?? autoSweepRuns(runs))) : 0
-  const sweepTotal = spec ? list.length * spec.loadFactors.length * sweepRuns : 0
+  const sweepTotal = spec ? list.length * points.length * sweepRuns : 0
   // The sweep is part of the same job list, so it is part of the same total:
   // a progress bar that stops at 100% and keeps running is a bar that lies.
   const total = list.length * runs + sweepTotal
@@ -67,7 +72,9 @@ export function startBatch({ engine, config, strategies, runs, sweep, names, onP
       config,
       strategies: list,
       runs,
-      ...(spec ? { sweep: { loadFactors: [...spec.loadFactors], runs: sweepRuns } } : {}),
+      ...(spec
+        ? { sweep: { param, values: [...points], loadFactors: [...points], runs: sweepRuns } }
+        : {}),
     })
     return {
       stop() {
@@ -90,9 +97,9 @@ export function startBatch({ engine, config, strategies, runs, sweep, names, onP
   for (const key of list) for (let r = 0; r < runs; r++) jobs.push({ kind: 'main', key, run: r })
   if (spec) {
     for (const key of list) {
-      for (let li = 0; li < spec.loadFactors.length; li++) {
+      for (let li = 0; li < points.length; li++) {
         for (let r = 0; r < sweepRuns; r++) {
-          jobs.push({ kind: 'sweep', key, li, loadFactor: spec.loadFactors[li], run: r })
+          jobs.push({ kind: 'sweep', key, li, param, value: points[li], run: r })
         }
       }
     }
@@ -102,8 +109,11 @@ export function startBatch({ engine, config, strategies, runs, sweep, names, onP
   const sweepAcc = new Map()
   const sweepBlock = spec
     ? {
-        loadFactors: [...spec.loadFactors],
-        byStrategy: Object.fromEntries(list.map((k) => [k, spec.loadFactors.map(() => null)])),
+        param,
+        values: [...points],
+        // Emitted under both names, exactly as the worker does it.
+        loadFactors: [...points],
+        byStrategy: Object.fromEntries(list.map((k) => [k, points.map(() => null)])),
       }
     : null
 
@@ -125,7 +135,7 @@ export function startBatch({ engine, config, strategies, runs, sweep, names, onP
           ...config,
           strategy: job.key,
           seed: (config.seed | 0) + job.run,
-          ...(job.kind === 'sweep' ? { loadFactor: job.loadFactor } : {}),
+          ...(job.kind === 'sweep' ? { [job.param]: job.value } : {}),
         })
         if (job.kind === 'main') byStrategy[job.key].push(result)
         else {

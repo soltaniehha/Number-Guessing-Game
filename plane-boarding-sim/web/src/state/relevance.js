@@ -18,8 +18,20 @@ export const ZONE_STRATEGIES = new Set([
   'common_sense_5tier',
 ])
 
-/** Strategies that read passenger status tiers. */
-export const TIER_STRATEGIES = new Set(['priority_5tier', 'common_sense_5tier', 'open_seating', 'block_boarding'])
+/**
+ * Strategies that actually read a passenger's status tier.
+ *
+ * `block_boarding` is deliberately NOT here: it boards the premium *cabin*
+ * first, which is a property of the seat map, and never looks at a frequent
+ * flyer tier. `southwest_2026` is, because its group assignment shifts whole
+ * groups by fare and status (STRATEGIES section 16).
+ */
+export const TIER_STRATEGIES = new Set([
+  'priority_5tier',
+  'common_sense_5tier',
+  'southwest_2026',
+  'open_seating',
+])
 
 const RELEVANT = { relevant: true }
 const no = (reason) => ({ relevant: false, reason })
@@ -55,6 +67,14 @@ export function relevanceOf(key, config, aircraft) {
         ? RELEVANT
         : no('This strategy ignores frequent-flyer status.')
 
+    // Where status SITS only matters to a strategy that boards by status. The
+    // tilt still decides which individuals are elite under every strategy;
+    // nothing else ever asks.
+    case 'eliteForwardBias':
+      return TIER_STRATEGIES.has(strategy)
+        ? RELEVANT
+        : no('This strategy ignores frequent-flyer status, so where status sits cannot change anything.')
+
     case 'doorAssignment':
       return doorCount > 1
         ? RELEVANT
@@ -89,6 +109,7 @@ export function relevanceOf(key, config, aircraft) {
     case 'stowWeibullScale':
     case 'stowWeibullShape':
     case 'stowVariability':
+    case 'stowPassSpeedFactor':
     case 'binBagsPerRowSide':
     case 'binSearchRadius':
     case 'binSearchPenalty':
@@ -98,11 +119,14 @@ export function relevanceOf(key, config, aircraft) {
         ? RELEVANT
         : no('Nobody is carrying a bag, so nothing is ever stowed.')
 
+    case 'sweepParam':
+    case 'sweepPoints':
     case 'sweepLoadFactors':
+    case 'sweepValues':
     case 'sweepRuns':
       return config.sweepEnabled
         ? RELEVANT
-        : no('Turn the load-factor sweep on to choose its points.')
+        : no('Turn the sweep on to choose the parameter it varies and the points it runs.')
 
     case 'stowBagExponent':
       return twoBaggers > 0
