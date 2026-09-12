@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "plane-boarding"
+version = "1.0.0"
+description = "Deterministic discrete-time simulator for airplane boarding strategies"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+boarding = "plane_boarding.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["plane_boarding*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
