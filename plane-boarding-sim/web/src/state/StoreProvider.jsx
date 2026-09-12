@@ -9,7 +9,7 @@
  *   PlaybackContext — the transport controls, whose identity is stable.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { deepEqual, makeConfigReducer, sanitizeConfig } from './configReducer.js'
+import { deepEqual, makeConfigReducer, pickKnown, sanitizeConfig } from './configReducer.js'
 import { buildDefaultConfig } from './configDefaults.js'
 import { readHashConfig, syncHash } from '../lib/urlConfig.js'
 import { PRESET_BY_ID } from '../app/presets.js'
@@ -32,6 +32,15 @@ export function usePlayback() {
 }
 
 export const SPEEDS = [1, 2, 5, 10, 25, 50, 100]
+
+/** True when the OS asks for reduced motion. Read at the moment of the decision. */
+export function prefersReducedMotion() {
+  try {
+    return window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches === true
+  } catch {
+    return false
+  }
+}
 const THEME_KEY = 'boardingLab.theme'
 const SECTION_KEY = 'boardingLab.sections'
 
@@ -54,8 +63,17 @@ function writeStored(key, value) {
   }
 }
 
+/** The theme the OS asks for, used when the user has not chosen one here. */
+export function preferredTheme() {
+  try {
+    return window.matchMedia?.('(prefers-color-scheme: dark)')?.matches === false ? 'light' : 'dark'
+  } catch {
+    return 'dark'
+  }
+}
+
 function useTheme() {
-  const [theme, setTheme] = useState(() => (readStored(THEME_KEY, 'dark') === 'light' ? 'light' : 'dark'))
+  const [theme, setTheme] = useState(() => (readStored(THEME_KEY, preferredTheme()) === 'light' ? 'light' : 'dark'))
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
     writeStored(THEME_KEY, theme)
@@ -73,8 +91,11 @@ export function StoreProvider({ engine, children }) {
   const [config, rawDispatch] = useReducer(reducer, defaults, (base) => {
     const fromHash = readHashConfig()
     if (!fromHash) return base
-    const merged = { ...base, ...fromHash }
-    return sanitizeConfig(merged, engine.resolveAircraft(merged.aircraftId))
+    // A link is untrusted input like any other: it goes through the same
+    // pickKnown gate as LOAD_CONFIG and APPLY_PRESET, or an arbitrary key
+    // would survive into the config and be re-encoded into the next link.
+    const merged = { ...base, ...pickKnown(fromHash, base) }
+    return sanitizeConfig(merged, engine.resolveAircraft(merged.aircraftId), base)
   })
 
   const aircraft = useMemo(() => engine.resolveAircraft(config.aircraftId), [engine, config.aircraftId])
@@ -277,10 +298,11 @@ function PlaybackProvider({ duration, hasReplay, children }) {
   const raf = useRef(0)
   const last = useRef(0)
 
-  // A fresh replay rewinds the transport and starts it.
+  // A fresh replay rewinds the transport and starts it — unless the user has
+  // asked for reduced motion, in which case it waits to be told to play.
   useEffect(() => {
     setT(0)
-    setPlaying(hasReplay && duration > 0)
+    setPlaying(hasReplay && duration > 0 && !prefersReducedMotion())
   }, [duration, hasReplay])
 
   useEffect(() => {

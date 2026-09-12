@@ -14,8 +14,8 @@
     },
     {
       "name": "schultz_reference",
-      "_why": "walkSpeedSd = 0 reduces the model exactly to Schultz's deterministic 0.8 m/s configuration, so this fixture is the apples-to-apples comparison against his published figures. Also the best structural regression canary in the set: it has no speed noise to hide a change behind.",
-      "config": { "aircraftId": "a320neo", "strategy": "random", "seed": 4242, "loadFactor": 0.9677419354838709, "doors": ["1L"], "walkSpeedSd": 0 }
+      "_why": "Schultz's own configuration: walkSpeedSd = 0 gives his deterministic 0.8 m/s, and stowPassSpeedFactor = 0 gives his strict cellular blocking. BOTH are pinned explicitly rather than inherited, because this fixture exists to be apples-to-apples with his published figures and must not drift when a shipped default moves. Also the best structural regression canary in the set: no speed noise to hide a change behind.",
+      "config": { "aircraftId": "a320neo", "strategy": "random", "seed": 4242, "loadFactor": 0.9677419354838709, "doors": ["1L"], "walkSpeedSd": 0, "stowPassSpeedFactor": 0 }
     },
     {
       "name": "e175_starved_bins",

@@ -490,6 +490,72 @@ They are collected here so they are not mistaken for sourced numbers:
   numeric source exists for the walk-back/gate-check penalty. Both the per-row capacity constant
   and the search-and-stow penalty are my extrapolation.
 
+### 12.3 Partial aisle blocking while stowing (`stowPassSpeedFactor`) — implemented, default off
+
+**What Schultz does.** In an ASEP/cellular model a passenger occupies a cell or
+they do not. There is no way to express "the aisle narrows"; a stowing passenger
+holds their cell outright and nobody passes. He therefore has no
+partial-blocking term at all. **[C]** (§0, §9.)
+
+**What we implemented.** A passenger stowing a bag physically steps into the
+seat-row gap and reaches up — the aisle narrows rather than closing, and people
+do edge past someone loading a bin. `stowPassSpeedFactor` (0–1, a fraction of
+walking speed) lets exactly one follower at a time squeeze past a STOWING
+passenger. A SHUFFLING passenger still blocks completely and always will: when
+seated occupants stand up to let a window passenger in, they are in the aisle.
+See ENGINE_SPEC §6.3 for the mechanism.
+
+**Why it was investigated.** Our strict-blocking model overshoots the field
+regression (§11.1) by ~50% on single-door boarding, and the diagnosed cause was
+exactly this: full blocking yields ~3 simultaneous stowers where the regression
+implies ~7. The mechanism is a genuine correction to a simplification, not a
+tuning knob invented to hit a number.
+
+**What the calibration found.** a320neo, `random`, 180 pax, 1L only, 100
+replications for the absolute figure; ratios over 70 replications per strategy;
+B777 over 20. Every row satisfies the ordering assertion except 0.60.
+
+| `stowPassSpeedFactor` | single-door T | f2b | b2f | wilma | rev.pyr | steffen | ordering | B777 best | B777 steffen |
+|---|---|---|---|---|---|---|---|---|---|
+| **0 (strict, shipped)** | **1419 s** ✗ | 1.48 ✓ | 1.10 ✗ | 0.94 ✗ | **0.90 ✓** | **0.78 ✓** | OK | **rev. pyramid ✓** | **1.01 ✓** |
+| 0.20 | 1144 s ✗ | 1.46 ✓ | 1.11 ✗ | 0.94 ✗ | 0.92 ✗ | 0.86 ✗ | OK | **wilma_zoned ✗** | 1.04 ✓ |
+| 0.30 | **1080 s ✓** | 1.47 ✓ | 1.12 ✗ | 0.92 ✗ | 0.92 ✗ | 0.84 ✗ | OK (by 0.001) | rev. pyramid ✓ | 1.03 ✓ |
+| 0.40 | **1038 s ✓** | 1.49 ✓ | 1.14 ✗ | 0.93 ✗ | 0.93 ✗ | 0.84 ✗ | OK | rev. pyramid ✓ | 1.01 ✓ |
+| 0.60 | **993 s ✓** | 1.52 ✗ | 1.19 ✗ | 0.93 ✗ | 0.95 ✗ | 0.84 ✗ | **FAIL** | rev. pyramid ✓ | 1.00 ✓ |
+
+Literature bands for reference: f2b 1.30–1.50, b2f 1.20–1.35, wilma 0.85–0.92,
+reverse pyramid 0.82–0.90, Steffen 0.70–0.80 (§5c).
+
+**Decision: default 0, mechanism kept and exposed.** No value in the physically
+plausible 0.2-0.6 range satisfies both the absolute band and the strategy
+ratios. Strict blocking scores **3 of 5** ratio bands and reproduces the
+published ordering and both twin-aisle findings; the best partial-blocking
+setting scores **1 of 5**, at 0.20 loses the B777 reverse-pyramid result, at
+0.30 holds the ordering by 0.001 (a coin flip), and at 0.60 loses it outright.
+
+The compression is arithmetic rather than a bug. Partial blocking shortens the
+queue behind a stower, so avoiding a stow-block is worth less -- and avoiding
+stow-blocks is most of what outside-in and Steffen buy you. Steffen's advantage
+falls from 22% to 16%, below Schultz's own realistic 20-25% figure for optimised
+strategies.
+
+The product's comparative claims ("outside-in saves you 7%") rest on the ratios;
+its absolute claims ("your flight boarded in N minutes") carry a documented and
+measurable level offset a reader can correct for. Shipping the ratios is the
+honest trade. Anyone who wants the absolute number instead can set
+`stowPassSpeedFactor` to 0.30-0.40 and accept the compression -- the mechanism
+is implemented, tested and deadlock-free, and this table says what it costs.
+
+**Still open.** The remaining ~50% single-door offset is unexplained by any
+mechanism we have tested (density law 3%, same-row serialisation 0.2%, slow
+passengers 2%, bin congestion 6%, door arrival process 0% once corrected to run
+in parallel). Either the strict single-file exclusion process is too pessimistic
+in some way we have not identified, or `T = 4.5N + 138` — a linear fit across a
+29–190 pax range, `[S]` single-source, and not reproducible from Schultz's own
+3.7 s arrivals plus ~26 s of per-passenger aisle service — is optimistic at the
+top of its range. Resolving it needs the Schultz PDFs that were unreachable in
+the research session (§14.1).
+
 ---
 
 ## 13. Sources

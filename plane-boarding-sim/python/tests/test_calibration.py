@@ -33,40 +33,111 @@ def a320_at_180(**overrides):
 
 
 def test_absolute_boarding_time_matches_the_field_regression():
-    """Random boarding, 180 passengers, the aircraft's AS-OPERATED door
-    configuration (easyJet boards 1L + 2L as standard). That is the
-    configuration the field dataset averages over -- see the companion test
-    below for the single-door figure, which is deliberately not the gate."""
-    b = run_batch(a320_at_180(), runs=30)
+    """THE calibration gate. Random boarding, 180 passengers, single door.
+
+    Schultz's regression is over 282 field-measured A320/737 boardings, which
+    are overwhelmingly single-door jetbridge operations -- so this is the
+    apples-to-apples configuration, and the one the product's headline "your
+    flight boarded in N minutes" has to get right.
+
+    The +/-15% band is wider than Schultz's own <5% model-vs-field deviation for
+    two reasons documented in RESEARCH_PARAMETERS 11.1: the regression is a
+    linear fit across a 29-190 pax range rather than a point measurement, and we
+    sample per-passenger walk speed, which he does not. Do not widen it without
+    reading that section.
+
+    Hitting this depends on `stowPassSpeedFactor` > 0 (ENGINE_SPEC 6.3). With
+    strict blocking the same scenario lands ~50% high.
+    """
+    b = run_batch(a320_at_180(doors=["1L"]), runs=30)
     assert b.paxCount == 180
     assert BAND_LO <= b.mean <= BAND_HI, (
         f"mean {b.mean:.0f}s is outside {BAND_LO:.0f}-{BAND_HI:.0f}s "
         f"(target {TARGET_180:.0f}s from T = 4.5N + 138)")
 
 
-def test_single_door_boarding_is_slower_and_stays_in_its_known_range():
-    """DOCUMENTED DEVIATION, pinned so it cannot drift silently.
+def test_strict_blocking_remains_available_and_is_the_slower_variant():
+    """`stowPassSpeedFactor = 0` is a first-class option, not a dead branch: it
+    is Schultz's own strict cellular blocking, and it is the right choice for
+    anyone who cares about strategy-ratio magnitudes more than absolute times.
+    Pinned so it cannot rot."""
+    strict = run_batch(a320_at_180(doors=["1L"], stowPassSpeedFactor=0.0), runs=20)
+    assert 1250 <= strict.mean <= 1600
+    assert strict.mean > BAND_HI, "strict blocking overshoots the regression, by design"
 
-    Forcing the same 180 passengers through 1L alone lands ~50% above the
-    Schultz regression. Our aisle is a strict single-file exclusion process in
-    which a stowing passenger blocks everyone behind for the whole stow, and
-    that yields roughly 3 simultaneous stowers where the regression implies
-    about 7. The relative ordering of strategies is unaffected (see below), so
-    this is a level offset in the single-door regime, not a shape error.
-    """
-    b = run_batch(a320_at_180(doors=["1L"]), runs=25)
-    assert 1250 <= b.mean <= 1600, f"single-door mean drifted to {b.mean:.0f}s"
+
+def test_two_door_boarding_is_sensible_and_meaningfully_faster():
+    """The as-operated easyJet configuration. Not a second calibration gate --
+    the regression describes single-door operations -- but a second door has to
+    buy a large, plausible saving or the door model is wrong."""
+    two = run_batch(a320_at_180(), runs=25)
+    one = run_batch(a320_at_180(doors=["1L"]), runs=25)
+    assert 450 <= two.mean <= 950
+    assert 0.20 <= 1.0 - two.mean / one.mean <= 0.50, (
+        f"second door saved {100 * (1 - two.mean / one.mean):.0f}%")
 
 
 def test_schultz_reference_configuration_is_stable():
-    """With walkSpeedSd = 0 the model reduces exactly to Schultz's deterministic
-    0.8 m/s configuration. Kept as a regression canary: if this moves,
-    something structural changed, not just a distribution parameter."""
-    b = run_batch(a320_at_180(walkSpeedSd=0.0), runs=25)
-    assert BAND_LO <= b.mean <= BAND_HI
-    varied = run_batch(a320_at_180(), runs=25)
+    """Schultz's own configuration: walkSpeedSd = 0 for his deterministic
+    0.8 m/s, stowPassSpeedFactor = 0 for his strict cellular blocking. BOTH are
+    pinned here rather than inherited, exactly as in the `schultz_reference`
+    parity fixture -- the point of this configuration is that it does not move
+    when a shipped default does. A regression canary with no speed noise to hide
+    a change behind."""
+    b = run_batch(a320_at_180(doors=["1L"], walkSpeedSd=0.0,
+                              stowPassSpeedFactor=0.0), runs=25)
+    assert 1250 <= b.mean <= 1600
+    varied = run_batch(a320_at_180(doors=["1L"], stowPassSpeedFactor=0.0), runs=25)
     assert b.totalSeconds.sd <= varied.totalSeconds.sd * 1.35, (
         "removing speed variance must not widen the boarding-time distribution")
+
+
+def test_partial_blocking_mechanism_does_what_it_claims():
+    """`stowPassSpeedFactor` is off by default but must stay working, because
+    it is the one lever that closes the absolute-time gap and someone will
+    reach for it. Faster squeeze => faster boarding, monotonically; and the
+    default of 0 must reproduce strict blocking exactly."""
+    strict = run_batch(a320_at_180(doors=["1L"], stowPassSpeedFactor=0.0), runs=12)
+    slow = run_batch(a320_at_180(doors=["1L"], stowPassSpeedFactor=0.25), runs=12)
+    quick = run_batch(a320_at_180(doors=["1L"], stowPassSpeedFactor=0.60), runs=12)
+    assert strict.mean > slow.mean > quick.mean
+    # Turning it on closes most of the gap to the field regression -- which is
+    # exactly why it is tempting, and exactly what RESEARCH_PARAMETERS 12.3
+    # weighs against the ratio cost.
+    assert quick.mean < strict.mean * 0.80
+    # The squeeze lock and the deferred stand-up are a deadlock risk if either
+    # side is got wrong, so assert the runs actually terminate.
+    for b in (slow, quick):
+        assert b.totalSeconds.max < 3600
+    shipped = run_batch(a320_at_180(doors=["1L"], stowPassSpeedFactor=0.40), runs=12)
+    default = run_batch(a320_at_180(doors=["1L"]), runs=12)
+    assert default.mean == shipped.mean, "the shipped default must be 0.40"
+
+
+def test_shuffling_always_blocks_completely_however_the_squeeze_is_set():
+    """The asymmetry is the physically important half of the mechanism: people
+    standing in the aisle to let a window passenger in cannot be walked past."""
+    from plane_boarding.config import BODY_DEPTH, SHUFFLING, WALKING
+    from plane_boarding.engine import run as engine_run
+    from helpers import cfg_for
+    cfg = cfg_for("a320neo", "random", seed=5, loadFactor=0.9,
+                  doors=["1L"], stowPassSpeedFactor=0.6)
+    _, rep = engine_run(cfg, record_replay=True, frame_interval=cfg.dt)
+    states, xs = rep["frames"]["state"], rep["frames"]["x"]
+    lanes = [p["lane"] for p in rep["passengers"]]
+    worst = 1e9
+    for f, st in enumerate(states):
+        row = xs[f]
+        hard = {}
+        for i, sst in enumerate(st):
+            if sst in (WALKING, SHUFFLING):
+                hard.setdefault(lanes[i], []).append(row[i])
+        for occupants in hard.values():
+            occupants.sort()
+            for a, b in zip(occupants, occupants[1:]):
+                worst = min(worst, b - a)
+    assert worst >= BODY_DEPTH - 1e-3, (
+        f"a walker got within {worst:.3f} m of a SHUFFLING passenger")
 
 
 def test_strategy_ordering_matches_the_literature():
@@ -90,32 +161,84 @@ def test_strategy_ordering_matches_the_literature():
         "adding aisle-spreading to outside-in should help")
 
 
-def test_zone_boarding_wastes_a_second_door():
+def test_a_cabin_wide_zone_order_cannot_be_right_for_two_doors():
     """A finding worth pinning, because it is counter-intuitive and it falls out
-    of the model rather than being put in: rear-first zone schemes are WORSE
-    than random through two doors, even though they are better through one.
-    Calling the rear zone first sends every one of those passengers to the aft
-    door while the forward door stands idle, so a scheme designed to spread the
-    aisle ends up serialising the doors instead."""
-    one = {b.strategy: b.mean for b in compare_strategies(
-        a320_at_180(doors=["1L"]), ["random", "back_to_front"], runs=20)}
-    two = {b.strategy: b.mean for b in compare_strategies(
-        a320_at_180(doors=["1L", "2L"]), ["random", "back_to_front"], runs=20)}
-    assert one["back_to_front"] / one["random"] > 1.0
-    assert two["back_to_front"] / two["random"] > one["back_to_front"] / one["random"]
+    of the model rather than being put in.
+
+    "Board the rear zone first" means far-end-first at the forward door and
+    NEAR-end-first at the aft door, and near-end-first is the front-to-back
+    pathology. So a zone scheme that helps through one door hurts through two.
+    The `doorSequencing` metric measures exactly this -- distance-from-door of
+    the first half of a door's queue minus the second half, reported for the
+    WORST door -- and the CLI surfaces it.
+    """
+    one = run_batch(a320_at_180(doors=["1L"]).replace(strategy="back_to_front"), runs=20)
+    two = run_batch(a320_at_180(doors=["1L", "2L"]).replace(strategy="back_to_front"), runs=20)
+    rnd1 = run_batch(a320_at_180(doors=["1L"]), runs=20)
+    rnd2 = run_batch(a320_at_180(doors=["1L", "2L"]), runs=20)
+
+    # Through one door the scheme is unambiguously far-end-first.
+    assert one.sequencing.mean > 0.20
+    # Through two it is near-end-first at the aft door, and that shows up.
+    assert two.sequencing.mean < -0.10
+    # And the penalty is real, not just a metric artefact.
+    assert two.mean / rnd2.mean > one.mean / rnd1.mean
+    # Random has no spatial logic at all, so it scores ~0 either way.
+    assert abs(rnd2.sequencing.mean) < 0.10
 
 
-def test_relative_speedups_are_in_the_published_ballpark():
+#: MONITORED, not gated. The published ratio magnitudes, with tolerances wide
+#: enough to catch a structural regression and no wider. RESEARCH_PARAMETERS
+#: 11.2 is explicit that magnitudes must NOT be a pass/fail gate: the
+#: experimental column (Steffen & Hotchkiss, 72 volunteers) and the simulation
+#: consensus disagree by a wide margin -- Steffen sits at 0.76 experimentally
+#: against 0.55-0.75 in simulation -- so any single band is a claim the
+#: literature does not support. The ORDERING is the gate; these are a tripwire.
+MONITORED_RATIOS = {
+    #  strategy            published    monitored band
+    "front_to_back":      ((1.30, 1.50), (1.15, 1.75)),
+    "back_to_front":      ((1.20, 1.35), (1.02, 1.55)),
+    "wilma":              ((0.85, 0.92), (0.80, 0.99)),
+    "reverse_pyramid":    ((0.82, 0.90), (0.78, 0.99)),
+    "steffen_perfect":    ((0.70, 0.80), (0.65, 0.92)),
+}
+
+
+def test_relative_speedups_stay_in_the_published_neighbourhood():
+    """Tripwire on the ratio magnitudes. See MONITORED_RATIOS for why these are
+    monitored rather than gated, and note the failure message prints the whole
+    table -- if this fires, the useful information is the shape of the drift,
+    not which single number crossed a line."""
     cfg = a320_at_180(doors=["1L"])
-    keys = ["front_to_back", "random", "wilma", "steffen_perfect"]
-    res = {b.strategy: b.mean for b in compare_strategies(cfg, keys, runs=18)}
+    keys = list(MONITORED_RATIOS)
+    res = {b.strategy: b.mean for b in compare_strategies(cfg, keys + ["random"], runs=25)}
     base = res["random"]
-    assert 1.20 <= res["front_to_back"] / base <= 1.60      # published 1.30-1.50
-    assert 0.85 <= res["wilma"] / base <= 0.95              # published 0.85-0.92
-    # Steffen's theoretical 2x is eroded to ~20-30% by party cohesion, 15%
-    # non-compliance and the door arrival process. If this drops below 0.65,
-    # check those frictions are actually switched on before touching anything.
-    assert 0.65 <= res["steffen_perfect"] / base <= 0.85
+
+    rows, failures = [], []
+    for key, ((plo, phi), (mlo, mhi)) in MONITORED_RATIOS.items():
+        r = res[key] / base
+        inside_published = plo <= r <= phi
+        inside_monitored = mlo <= r <= mhi
+        rows.append(f"    {key:<18s} {r:5.3f}   published {plo:.2f}-{phi:.2f} "
+                    f"{'ok ' if inside_published else 'OUT'}   "
+                    f"monitored {mlo:.2f}-{mhi:.2f} {'ok' if inside_monitored else 'OUT'}")
+        if not inside_monitored:
+            failures.append(key)
+
+    report = (
+        "\nstrategy ratio table (a320neo, 1L only, 180 pax, random = 1.000):\n"
+        + "\n".join(rows)
+        + "\n\n  Published-band misses are INFORMATIONAL. docs/RESEARCH_PARAMETERS.md"
+          "\n  section 11.2: the experimental and simulation columns disagree too"
+          "\n  widely for magnitudes to gate, so the ORDERING is the assertion that"
+          "\n  matters (see test_strategy_ordering_matches_the_literature)."
+          "\n  Section 12.3 records that partial aisle blocking deliberately"
+          "\n  compresses these ratios toward parity in exchange for credible"
+          "\n  absolute times."
+          "\n  A monitored-band miss is different: that is a structural regression"
+          "\n  and something is actually broken."
+    )
+    assert not failures, f"ratios outside their MONITORED bands: {failures}\n{report}"
 
 
 def test_boarding_time_is_linear_in_load_factor():

@@ -51,7 +51,7 @@ class RunResult:
         "seatedCurve", "aisleOccupancy", "congestion", "perPassenger",
         "timeBreakdown", "interference", "gateChecks", "binSearches",
         "aisleBlockEvents", "p50TimeToSeat", "p90TimeToSeat", "maxTimeToSeat",
-        "throughputPaxPerMin", "completed",
+        "throughputPaxPerMin", "completed", "doorStats", "doorSequencing",
     )
 
     def __init__(self, **kw: Any):
@@ -87,6 +87,8 @@ class RunResult:
             "maxTimeToSeat": self.maxTimeToSeat,
             "throughputPaxPerMin": self.throughputPaxPerMin,
             "completed": self.completed,
+            "doorStats": {k: dict(v) for k, v in self.doorStats.items()},
+            "doorSequencing": self.doorSequencing,
         }
         if per_passenger:
             out["perPassenger"] = [r.to_dict() for r in self.perPassenger]

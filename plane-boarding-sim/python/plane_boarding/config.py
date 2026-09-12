@@ -110,7 +110,7 @@ class SimConfig:
         "stowWeibullShape", "stowWeibullScale", "stowVariability",
         "shuffleMoveMin", "shuffleMoveMode", "shuffleMoveMax",
         "shuffleMovements", "shuffleSamePartyMovements",
-        "doorArrivalMean",
+        "stowPassSpeedFactor", "doorArrivalMean",
         "binBagsPerRowSide", "binSearchRadius", "binSearchPenalty",
         "gateCheckPenalty", "binCongestionWeight",
         "zoneCount", "keepPartiesTogether", "preboardFirst",
@@ -156,6 +156,7 @@ class SimConfig:
         }
         self.shuffleSamePartyMovements = int(r["shuffleSamePartyMovements"])
 
+        self.stowPassSpeedFactor = float(r["stowPassSpeedFactor"])
         self.doorArrivalMean = float(r["doorArrivalMean"])
 
         bb = r.get("binBagsPerRowSide")
@@ -206,6 +207,11 @@ class SimConfig:
             raise ConfigError(
                 "shuffle movement triangular must satisfy min <= mode <= max, got "
                 f"({self.shuffleMoveMin}, {self.shuffleMoveMode}, {self.shuffleMoveMax})"
+            )
+        if not 0.0 <= self.stowPassSpeedFactor <= 1.0:
+            raise ConfigError(
+                "stowPassSpeedFactor must be in [0, 1] -- it is a fraction of walk "
+                f"speed, got {self.stowPassSpeedFactor}"
             )
         if self.doorArrivalMean < 0:
             raise ConfigError(f"doorArrivalMean must be non-negative, got {self.doorArrivalMean}")

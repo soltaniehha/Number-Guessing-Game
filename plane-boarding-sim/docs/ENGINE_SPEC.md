@@ -478,6 +478,45 @@ full narrowbody that is several minutes of aisle occupancy in aggregate. A
 The passenger blocks the aisle for the whole shuffle, then becomes SEATED and is
 removed from the lane.
 
+### 6.3 Partial blocking while stowing (`stowPassSpeedFactor`)
+
+A passenger stowing a bag does not stand in the middle of the aisle: they step
+into the seat-row gap and reach up. The aisle narrows; it does not close. People
+routinely edge past someone loading a bin.
+
+`stowPassSpeedFactor` models that. When it is **> 0**:
+
+* A **STOWING** passenger is a *soft* obstruction. Exactly one follower at a
+  time may squeeze past them, moving at `stowPassSpeedFactor x walkSpeed` while
+  alongside. The mutual exclusion is a per-stower lock, taken on entering the
+  squeeze and released once the passer is a full `BODY_DEPTH` beyond.
+* A follower may only squeeze past if their **own seat is further on**. Two
+  passengers bound for the same row still queue: there is one aisle position to
+  stand in and they both need it.
+* Squeezing does not license a collision. The passer is still bounded by the
+  first non-stowing body beyond the stower.
+* Once a stow finishes, the squeeze closes to new entrants and the transition to
+  SHUFFLING waits for the current passer to clear. Seated occupants cannot stand
+  up into somebody who is edging past, and closing the squeeze first bounds that
+  wait to one passer rather than letting heavy traffic starve the stower.
+* A **SHUFFLING** passenger always blocks completely, whatever this parameter is
+  set to. When the aisle and middle occupants stand up to let a window passenger
+  in, they are physically in the aisle. This asymmetry is the point of the
+  mechanism: it makes seat interference strictly more expensive than bag
+  stowing, which is the effect outside-in methods exist to exploit.
+
+When it is **0** (the shipped default) a STOWING passenger is a hard obstruction
+and the model reduces exactly to the strict-blocking process described above.
+
+**Why the default is 0.** Turning the mechanism on brings absolute single-door
+boarding time onto Schultz's field regression, which the strict model overshoots
+by ~50%. But it also compresses every strategy ratio toward 1.0 -- Steffen moves
+from 0.77 to 0.85, outside the published band -- and at 0.30 it inverts the
+WilMA/reverse-pyramid ordering and loses the twin-aisle result that reverse
+pyramid is best on a B777. Since the product's comparative claims rest on those
+ratios and its absolute claims carry a documented offset, the ratios win. The
+full experiment is recorded in docs/RESEARCH_PARAMETERS.md 12.3.
+
 **(e) Bookkeeping** — record per-tick aisle occupancy, seated count, and each
 passenger's state for the visualization event log.
 
@@ -541,6 +580,8 @@ RunResult {
   p50TimeToSeat, p90TimeToSeat, maxTimeToSeat,
   throughputPaxPerMin,
   doors, completed,
+  doorStats:      {doorId: {count, meanWalk, farFirst}},
+  doorSequencing: number,
 }
 ```
 
@@ -560,6 +601,13 @@ Notes on a few fields that are easy to read the wrong way:
   Per-tick accumulation would mean an O(occupants) row lookup on every step for
   a figure that is only ever plotted; sampling is an unbiased estimator of the
   same quantity and keeps a 350-passenger run under a second.
+- **`doorSequencing`** scores how well the boarding order suits the doors. Per
+  door it is the mean distance-from-door of the first half of that door's queue
+  minus that of the second half, over the cabin length: positive means the far
+  end of that door's region loads first, which is what you want. The reported
+  figure is the **worst** door, not the average, because a cabin-wide rear-first
+  order scores about +0.25 at a forward door and -0.25 at an aft one and the two
+  cancel if averaged -- hiding exactly the effect this is here to measure.
 - **`completed`** is false if the run hit `MAX_SIM_SECONDS`. Any consumer that
   averages `totalSeconds` should check it.
 
@@ -585,6 +633,7 @@ SimConfig {
   eliteMix: {tier: weight},
   // service times
   stowWeibullShape, stowWeibullScale, stowVariability,
+  stowPassSpeedFactor,        // 0 = a stowing passenger closes the aisle (default)
   shuffleMoveMin, shuffleMoveMode, shuffleMoveMax,
   shuffleMovements: {none, aisle, middle, both}, shuffleSamePartyMovements,
   doorArrivalMean,

@@ -39,8 +39,34 @@ def trace(aid="a320neo", strategy="random", seed=3, **ov):
 @pytest.mark.parametrize("aid,strategy", [
     ("a320neo", "random"), ("b737_max8", "random"), ("b777_300er", "wilma"),
 ])
-def test_two_people_are_never_closer_than_one_body_depth(aid, strategy):
+def test_solid_bodies_are_never_closer_than_one_body_depth(aid, strategy):
+    """Exclusion applies to everyone standing IN the aisle: walkers and, above
+    all, shuffling passengers. A STOWING passenger is deliberately excluded --
+    they have stepped into the seat-row gap and a follower is allowed to edge
+    past them (ENGINE_SPEC 6.3). That exemption is checked separately below."""
     cfg, ac, result, replay, speed, lanes = trace(aid, strategy, loadFactor=0.9)
+    states, xs = replay["frames"]["state"], replay["frames"]["x"]
+    worst = 1e9
+    for f, st in enumerate(states):
+        row = xs[f]
+        by_lane = {}
+        for i, s in enumerate(st):
+            if s in (WALKING, SHUFFLING):
+                by_lane.setdefault(lanes[i], []).append(row[i])
+        for occupants in by_lane.values():
+            occupants.sort()
+            for a, b in zip(occupants, occupants[1:]):
+                worst = min(worst, b - a)
+    # The replay rounds x to 0.1 mm, so allow that much slack and no more.
+    assert worst >= BODY_DEPTH - 1e-3, f"closest approach was {worst:.4f} m"
+
+
+@pytest.mark.parametrize("aid", ["a320neo", "b777_300er"])
+def test_strict_blocking_excludes_stowing_passengers_too(aid):
+    """With the squeeze switched off the model must be a plain single-file
+    exclusion process again: nobody within a body depth of ANYBODY."""
+    cfg, ac, result, replay, speed, lanes = trace(
+        aid, "random", loadFactor=0.9, stowPassSpeedFactor=0.0)
     states, xs = replay["frames"]["state"], replay["frames"]["x"]
     worst = 1e9
     for f, st in enumerate(states):
@@ -53,8 +79,26 @@ def test_two_people_are_never_closer_than_one_body_depth(aid, strategy):
             occupants.sort()
             for a, b in zip(occupants, occupants[1:]):
                 worst = min(worst, b - a)
-    # The replay rounds x to 0.1 mm, so allow that much slack and no more.
     assert worst >= BODY_DEPTH - 1e-3, f"closest approach was {worst:.4f} m"
+
+
+def test_only_one_passenger_squeezes_past_a_stower_at_a_time():
+    """The squeeze is a one-at-a-time mutual exclusion. If two followers were
+    ever alongside the same stowing passenger, the lock is broken."""
+    cfg, ac, result, replay, speed, lanes = trace("a320neo", "random", loadFactor=0.95)
+    states, xs = replay["frames"]["state"], replay["frames"]["x"]
+    for f, st in enumerate(states):
+        row = xs[f]
+        for i, s in enumerate(st):
+            if s != STOWING:
+                continue
+            close = sum(
+                1 for j, s2 in enumerate(st)
+                if j != i and s2 in (WALKING, SHUFFLING) and lanes[j] == lanes[i]
+                and abs(row[j] - row[i]) < BODY_DEPTH - 1e-6
+            )
+            assert close <= 1, (
+                f"{close} passengers alongside stower {i} at frame {f}")
 
 
 def test_nobody_moves_faster_than_their_own_walk_speed():
@@ -80,30 +124,61 @@ def test_a_stowing_or_seated_passenger_does_not_drift():
                 assert xs[f][i] == pytest.approx(xs[f - 1][i], abs=1e-6)
 
 
-def test_nobody_overtakes_in_a_single_aisle_lane():
-    """A cabin aisle is strictly single file. If the relative order of two people
-    in the same lane ever flips, the exclusion model is broken."""
+def test_the_only_legal_overtake_is_past_a_stowing_passenger():
+    """A cabin aisle is single file. The one exception the model allows is
+    edging past somebody who has stepped aside to load a bin -- so an order flip
+    is legal if and only if a STOWING passenger is one of the two."""
     cfg, ac, result, replay, speed, lanes = trace("a320neo", "random", loadFactor=0.95)
     states, xs = replay["frames"]["state"], replay["frames"]["x"]
-    prev_order = {}
+    illegal = _order_flips(states, xs, lanes, ignore_stowing=True)
+    assert not illegal, f"illegal overtakes: {illegal[:5]}"
+    legal = _order_flips(states, xs, lanes, ignore_stowing=False)
+    assert legal, "no squeeze ever happened -- this test is not exercising anything"
+
+
+def test_strict_blocking_permits_no_overtaking_at_all():
+    cfg, ac, result, replay, speed, lanes = trace(
+        "a320neo", "random", loadFactor=0.95, stowPassSpeedFactor=0.0)
+    states, xs = replay["frames"]["state"], replay["frames"]["x"]
+    assert not _order_flips(states, xs, lanes, ignore_stowing=False)
+
+
+def _order_flips(states, xs, lanes, ignore_stowing):
+    """Every (frame, a, b) where two people in the same lane swapped places.
+
+    With `ignore_stowing` the pair is skipped when either was STOWING in the
+    frame before or after the swap, which is exactly the squeeze exemption.
+    """
+    flips = []
+    prev_rank = {}
+    prev_state = None
     for f, st in enumerate(states):
         by_lane = {}
         for i, s in enumerate(st):
             if s in IN_AISLE:
                 by_lane.setdefault(lanes[i], []).append((xs[f][i], i))
+        rank = {}
         for lane, occ in by_lane.items():
             occ.sort()
-            order = [i for _, i in occ]
-            rank = {pid: k for k, pid in enumerate(order)}
-            for pid, k in rank.items():
-                for other, k2 in rank.items():
-                    if pid < other and pid in prev_order.get(lane, {}) and other in prev_order[lane]:
-                        was = prev_order[lane][pid] < prev_order[lane][other]
-                        now = k < k2
-                        assert was == now, (
-                            f"pax {pid} and {other} swapped places in lane {lane} at frame {f}")
-            prev_order.setdefault(lane, {})
-            prev_order[lane] = rank
+            for k, (_, pid) in enumerate(occ):
+                rank[pid] = (lane, k)
+        for pid, (lane, k) in rank.items():
+            for other, (lane2, k2) in rank.items():
+                if pid >= other or lane != lane2:
+                    continue
+                before = prev_rank.get(pid), prev_rank.get(other)
+                if before[0] is None or before[1] is None or before[0][0] != lane:
+                    continue
+                if (before[0][1] < before[1][1]) == (k < k2):
+                    continue
+                if ignore_stowing and (
+                    st[pid] == STOWING or st[other] == STOWING
+                    or prev_state[pid] == STOWING or prev_state[other] == STOWING
+                ):
+                    continue
+                flips.append((f, pid, other))
+        prev_rank, prev_state = rank, st
+    return flips
 
 
 def test_passengers_only_ever_move_toward_their_own_seat():

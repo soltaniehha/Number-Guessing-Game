@@ -26,6 +26,7 @@ class BatchResult:
     __slots__ = (
         "strategy", "aircraftId", "loadFactor", "runs", "totalSeconds",
         "gateChecks", "interference", "timeToSeat", "throughput", "paxCount",
+        "sequencing",
     )
 
     def __init__(self, strategy: str, aircraft_id: str, load_factor: float,
@@ -38,6 +39,7 @@ class BatchResult:
         self.gateChecks = Aggregate([float(r.gateChecks) for r in results])
         self.throughput = Aggregate([r.throughputPaxPerMin for r in results])
         self.timeToSeat = Aggregate([r.p90TimeToSeat for r in results])
+        self.sequencing = Aggregate([r.doorSequencing for r in results])
         self.paxCount = results[0].paxCount if results else 0
         agg: Dict[str, float] = {"none": 0.0, "one": 0.0, "two": 0.0, "sameParty": 0.0}
         for r in results:
@@ -62,6 +64,7 @@ class BatchResult:
             "gateChecks": self.gateChecks.to_dict(),
             "throughputPaxPerMin": self.throughput.to_dict(),
             "p90TimeToSeat": self.timeToSeat.to_dict(),
+            "doorSequencing": self.sequencing.to_dict(),
             "interference": dict(self.interference),
         }
 

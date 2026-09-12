@@ -33,6 +33,15 @@
   "shuffleMovements": { "none": 1, "aisle": 4, "middle": 5, "both": 9 },
   "shuffleSamePartyMovements": 2,
 
+  "_stowPass_comment": "PARTIAL BLOCKING. A passenger stowing a bag steps out of the aisle centreline into the seat-row gap: the aisle narrows but does not close, and one follower at a time can edge past at this fraction of their walking speed. A SHUFFLING passenger is different and always blocks completely -- when seated occupants stand up to let a window passenger in they are physically in the aisle and nobody gets through. That asymmetry is the point: it makes seat interference strictly more expensive than bag stowing. Schultz has no partial-blocking term (a cellular model cannot express one), so this is a deliberate deviation. It is what makes absolute boarding times credible; the cost is that strategy advantages compress toward parity. Full evidence and the factor sweep: docs/RESEARCH_PARAMETERS.md 12.3.",
+  "_stowPassSpeedFactor_options": [
+    { "value": 0.0, "label": "Strict aisle blocking (Schultz-comparable)", "note": "A stowing passenger closes the aisle outright, as in Schultz's cellular model. Use this for apples-to-apples comparison against his published figures, and when strategy-ratio magnitudes matter more than absolute times. Costs ~50% on absolute single-door boarding time." },
+    { "value": 0.2, "label": "Difficult squeeze", "note": "Edging past somebody wrestling a roller bag in a 19-inch aisle." },
+    { "value": 0.4, "label": "Normal squeeze (default)", "note": "Calibrated: puts single-door boarding on Schultz's field regression." },
+    { "value": 0.6, "label": "Easy sidestep", "note": "A wide aisle and a considerate stower." }
+  ],
+  "stowPassSpeedFactor": 0.40,
+
   "_door_comment": "Measured inter-arrival of passengers at the aircraft door, exponential with mean 3.7 s (Schultz). This is a major serialising constraint: on a 186-seat single-door boarding it alone accounts for ~11.5 minutes.",
   "doorArrivalMean": 3.7,
 

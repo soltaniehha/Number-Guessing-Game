@@ -280,6 +280,16 @@ def run(
     pwasblocked = [False] * n
     pgatechecked = [0] * n
     pidx = [0] * n
+    # Partial-blocking bookkeeping. A STOWING passenger stands in the seat-row
+    # gap rather than the aisle centreline, so exactly ONE follower at a time
+    # may squeeze past them; `pass_holder` is that mutual exclusion and
+    # `passing` is the follower's side of it. `stow_done` closes the squeeze to
+    # new entrants the moment the stow finishes, so a stower in heavy traffic
+    # cannot be starved of its chance to sit down.
+    pass_holder = [-1] * n
+    passing = [-1] * n
+    stow_done = [False] * n
+    pending_shuffle: List[int] = []
 
     pbags = [0] * n
     pmult = [1.0] * n
@@ -360,6 +370,7 @@ def run(
     gate_penalty = cfg.gateCheckPenalty
     bin_weight = cfg.binCongestionWeight
     door_mean = cfg.doorArrivalMean
+    pass_factor = cfg.stowPassSpeedFactor
     headway = DESIRED_HEADWAY
     body = BODY_DEPTH
     min_frac = MIN_SPEED_FRACTION
@@ -395,6 +406,17 @@ def run(
             pidx[occ[j]] = j
 
     def door_clear(lane: int, x: float) -> bool:
+        """Is the doorway free by one body depth?
+
+        Stowing passengers count here even though they are soft obstructions
+        once you are walking. Releasing somebody straight into a stower's
+        squeeze zone would put them there without the squeeze lock, and if the
+        stow then finished neither could move: the stower would wait for the
+        aisle to clear while the walker waited for the stower. Keeping the
+        doorway strictly clear removes the whole failure mode, and it costs
+        little realism -- a passenger stowing at row 1 really does hold up the
+        door.
+        """
         occ = lane_occ[lane]
         if not occ:
             return True
@@ -443,6 +465,31 @@ def run(
                 gate_checks += 1
                 penalty += gate_penalty
         return penalty
+
+    def stower_clear(pid: int) -> bool:
+        """May this stower stand its neighbours up yet?
+
+        Not while anybody is within a body depth of them -- and that is a wider
+        condition than "somebody holds the squeeze lock", because a passenger
+        released at the door can land inside a stower's zone without ever having
+        taken the lock (door clearance ignores stowers, by design). occ is
+        sorted, so only the immediate neighbours can be close enough to matter.
+        """
+        occ = lane_occ[plane[pid]]
+        i = pidx[pid]
+        x = px[pid]
+        if i > 0 and x - px[occ[i - 1]] < body - 1e-9:
+            return False
+        if i + 1 < len(occ) and px[occ[i + 1]] - x < body - 1e-9:
+            return False
+        return True
+
+    def release_pass(pid: int) -> None:
+        sp = passing[pid]
+        if sp >= 0:
+            if pass_holder[sp] == pid:
+                pass_holder[sp] = -1
+            passing[pid] = -1
 
     def begin_shuffle(pid: int, t: float, tick: int) -> None:
         nonlocal inter_none, inter_one, inter_two, inter_same
@@ -497,6 +544,7 @@ def run(
             picker.on_seated(pseat[pid])
 
     def arrive(pid: int, t: float, tick: int) -> None:
+        release_pass(pid)
         pwalk[pid] = t - penter[pid]
         bags = pbags[pid]
         if bags <= 0:
@@ -568,9 +616,21 @@ def run(
         if due:
             for pid in due:
                 if pstate[pid] == STOWING:
-                    begin_shuffle(pid, t, tick)
+                    # Finished with the bin, but the seat occupants cannot stand
+                    # up while somebody is edging past. Closing the squeeze to
+                    # new entrants (stow_done) bounds the wait to one passer.
+                    stow_done[pid] = True
+                    pending_shuffle.append(pid)
                 elif pstate[pid] == SHUFFLING:
                     sit_down(pid, t)
+        if pending_shuffle:
+            still: List[int] = []
+            for pid in pending_shuffle:
+                if pass_holder[pid] < 0 and stower_clear(pid):
+                    begin_shuffle(pid, t, tick)
+                else:
+                    still.append(pid)
+            pending_shuffle[:] = still
 
         # (c) move walkers
         for lane in range(n_lanes):
@@ -586,11 +646,53 @@ def run(
             for pid in walkers:
                 i = pidx[pid]
                 d = pdir[pid]
+                # Let go of a squeeze once fully clear of the stower.
+                sp = passing[pid]
+                if sp >= 0 and d * (px[pid] - px[sp]) > body:
+                    if pass_holder[sp] == pid:
+                        pass_holder[sp] = -1
+                    passing[pid] = -1
+                    sp = -1
+
                 j = i + d
+                cap = 1.0
                 if 0 <= j < n_occ:
-                    gap = abs(px[occ[j]] - px[pid]) - body
-                    if gap < 0.0:
-                        gap = 0.0
+                    nb = occ[j]
+                    squeeze = False
+                    # stowPassSpeedFactor == 0 turns the mechanism off entirely
+                    # and restores the strict model in which a stowing passenger
+                    # closes the aisle outright.
+                    if pass_factor > 0.0 and pstate[nb] == STOWING:
+                        if sp == nb:
+                            squeeze = True
+                        elif (pass_holder[nb] < 0 and not stow_done[nb]
+                              and d * (ptarget[pid] - px[nb]) > 1e-9):
+                            # Passing is only meaningful if your seat is BEYOND
+                            # theirs. Two passengers bound for the same row still
+                            # queue: there is one aisle position to stand in.
+                            if sp >= 0:
+                                if pass_holder[sp] == pid:
+                                    pass_holder[sp] = -1
+                                passing[pid] = -1
+                            pass_holder[nb] = pid
+                            passing[pid] = nb
+                            squeeze = True
+                    if squeeze:
+                        cap = pass_factor
+                        # Still must not run into whoever is beyond the stower(s).
+                        k = j + d
+                        while 0 <= k < n_occ and pstate[occ[k]] == STOWING:
+                            k += d
+                        if 0 <= k < n_occ:
+                            gap = abs(px[occ[k]] - px[pid]) - body
+                            if gap < 0.0:
+                                gap = 0.0
+                        else:
+                            gap = 1e18
+                    else:
+                        gap = abs(px[nb] - px[pid]) - body
+                        if gap < 0.0:
+                            gap = 0.0
                     frac = gap / headway
                     if frac > 1.0:
                         frac = 1.0
@@ -600,17 +702,24 @@ def run(
                     gap = 1e18
                     frac = 1.0
                 free = pspeed[pid] * dt          # what they could do unobstructed
-                desired = free * frac            # after the density slowdown
+                desired = free * frac * cap      # density slowdown, then the squeeze
                 allowed = gap if gap < desired else desired
                 remaining = abs(ptarget[pid] - px[pid])
                 step = allowed if allowed < remaining else remaining
                 if step > 0.0:
                     px[pid] += d * step
                     ptrav[pid] += step
+                    # Crossing a stower reorders the lane: keep occ sorted by x.
+                    sp = passing[pid]
+                    if sp >= 0 and d * (px[pid] - px[sp]) > 0.0:
+                        a, b = pidx[pid], pidx[sp]
+                        if a + d == b:
+                            occ[a], occ[b] = occ[b], occ[a]
+                            pidx[pid], pidx[sp] = b, a
                 # Lost time is measured against FREE FLOW, so it captures the
-                # density slowdown as well as a hard stop -- but the final
-                # partial step onto your own row is arrival, not obstruction,
-                # so `remaining` is deliberately excluded from this comparison.
+                # density slowdown and the squeeze as well as a hard stop -- but
+                # the final partial step onto your own row is arrival, not
+                # obstruction, so `remaining` is excluded from this comparison.
                 if allowed < free:
                     pblocked[pid] += dt * (1.0 - allowed / free)
                     if not pwasblocked[pid]:
@@ -690,6 +799,43 @@ def run(
         ))
     records.sort(key=lambda r: r.id)
 
+    # Per-door sequencing quality. The interesting question with more than one
+    # door is not "was a door idle" -- both doors admit from t=0 -- it is
+    # "did each door load its FAR end first". Boarding the rows nearest a door
+    # first is the front-to-back pathology in miniature, and a zone order that
+    # is right for the forward door is automatically wrong for the aft one.
+    #
+    # Score, per door: mean distance-from-door of the first half of that door's
+    # queue minus that of the second half, over the cabin length. Positive = far
+    # end first (what you want); negative = the pathology; near zero = no spatial
+    # logic. The reported figure is the WORST door, not the average, because a
+    # cabin-wide rear-first order scores +0.25 at the forward door and -0.25 at
+    # the aft one and those cancel to nothing if you average them -- which would
+    # hide precisely the effect this measures.
+    door_stats: Dict[str, Dict[str, Any]] = {}
+    door_x = {d.id: d.x for d in doors}
+    by_door: Dict[str, List[Tuple[int, float]]] = {d.id: [] for d in doors}
+    for p in queue:
+        s_ = pseat[p.boardingIndex]
+        if s_ is not None and p.doorId in by_door:
+            by_door[p.doorId].append((p.boardingIndex, abs(s_.x - door_x[p.doorId])))
+    scores: List[float] = []
+    span = ac.length if ac.length > 0 else 1.0
+    for did, entries in by_door.items():
+        entries.sort()
+        k = len(entries)
+        stats: Dict[str, Any] = {"count": k, "meanWalk": 0.0, "farFirst": 0.0}
+        if k:
+            stats["meanWalk"] = round(sum(v for _, v in entries) / k, 6)
+        if k >= 4:
+            half = k // 2
+            first = sum(v for _, v in entries[:half]) / half
+            second = sum(v for _, v in entries[half:]) / (k - half)
+            stats["farFirst"] = round((first - second) / span, 6)
+            scores.append(stats["farFirst"])
+        door_stats[did] = stats
+    sequencing = round(min(scores), 6) if scores else 0.0
+
     sorted_sits = sorted(sits)
     result = RunResult(
         totalSeconds=round(total, 6),
@@ -721,6 +867,8 @@ def run(
         maxTimeToSeat=round(sorted_sits[-1], 6) if sorted_sits else 0.0,
         throughputPaxPerMin=round(n / (total / 60.0), 6) if total > 0 else 0.0,
         completed=completed,
+        doorStats=door_stats,
+        doorSequencing=sequencing,
     )
 
     replay = None

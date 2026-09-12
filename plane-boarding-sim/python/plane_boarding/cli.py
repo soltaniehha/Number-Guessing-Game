@@ -162,16 +162,19 @@ def cmd_compare(args: argparse.Namespace) -> int:
     print(" ranked fastest first; 'vs random' is the mean ratio "
           "(common random numbers, so the comparison is paired)")
     print("=" * 100)
+    multi_door = len(cfg.doors or ac.default_doors()) > 1
+    idle_col = f" {'far-first':>9s}"
     hdr = (f" {'#':>2}  {'strategy':<20s} {'mean':>7s} {'+/-95%':>7s} "
-           f"{'sd':>6s} {'p05':>6s} {'p95':>6s} {'vs rnd':>7s}  relative time")
+           f"{'sd':>6s} {'p05':>6s} {'p95':>6s} {'vs rnd':>7s}{idle_col}  relative time")
     print(hdr)
     print("-" * 100)
     for i, b in enumerate(results, 1):
         ratio = b.mean / baseline.mean if baseline.mean else 0.0
+        idle = f" {b.sequencing.mean:+9.2f}"
         print(f" {i:2d}  {b.strategy:<20s} {_fmt_mmss(b.mean):>7s} "
               f"{b.totalSeconds.ci95:7.1f} {b.totalSeconds.sd:6.1f} "
               f"{_fmt_mmss(b.totalSeconds.p05):>6s} {_fmt_mmss(b.totalSeconds.p95):>6s} "
-              f"{ratio:7.3f}  {_bar(b.mean, worst, 24)}")
+              f"{ratio:7.3f}{idle}  {_bar(b.mean, worst, 24)}")
     print("-" * 100)
     best = results[0]
     saving = baseline.mean - best.mean
@@ -181,6 +184,20 @@ def cmd_compare(args: argparse.Namespace) -> int:
     print(" seat interference (mean events/run):  "
           + "   ".join(f"{b.strategy}={b.interference['one'] + b.interference['two']:.0f}"
                        for b in results[:4]))
+    if multi_door:
+        # The counter-intuitive finding worth putting in front of the user: a
+        # rear-first zone scheme sends everyone it calls to the AFT door while
+        # the forward door stands empty, so a method designed to spread the
+        # aisle ends up serialising the two doors instead.
+        by_seq = sorted(results, key=lambda b: b.sequencing.mean)
+        worstseq = by_seq[0]
+        if worstseq.sequencing.mean < -0.05:
+            print(f" door sequencing: '{worstseq.strategy}' scores "
+                  f"{worstseq.sequencing.mean:+.2f} -- it loads the rows NEAREST a door "
+                  f"first, which is the front-to-back pathology in miniature.")
+            print("   -> With two doors a single cabin-wide zone order cannot be right for "
+                  "both: calling the rear zone first is far-end-first at 1L and "
+                  "near-end-first at 2L. Zone order has to be set per door.")
     print("=" * 100)
     return 0
 

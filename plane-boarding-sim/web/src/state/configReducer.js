@@ -43,9 +43,54 @@ export function sanitizeDoors(doors, aircraft) {
   return kept.length ? kept : defaultDoorsFor(aircraft)
 }
 
-/** Clamp a whole config into legality for the aircraft it names. */
-export function sanitizeConfig(config, aircraft) {
+/**
+ * Coerce every value whose default is a number (or a nested map of numbers)
+ * into a finite number, falling back to the default when it cannot be.
+ *
+ * A hash or a pasted blob is attacker-shaped input: `{"loadFactor":"banana"}`
+ * used to sail through `Number.isFinite` guards untouched, render as `NaN%`
+ * and then be re-encoded into the shareable link. Anything that is not a
+ * finite number after `Number()` is simply not a value, so the default wins.
+ *
+ * `null` defaults mark the nullable-numeric parameters (bin capacity, which
+ * means "inherit from the airframe" when null); they accept null or a finite
+ * number and nothing else. Booleans are held to `typeof` for the same reason —
+ * `Boolean('false')` is not the answer anyone wants.
+ */
+export function coerceToSchema(config, defaults) {
   const next = { ...config }
+  if (!defaults || typeof defaults !== 'object') return next
+  for (const [key, fallback] of Object.entries(defaults)) {
+    const value = next[key]
+    if (typeof fallback === 'number') {
+      const n = Number(value)
+      next[key] = Number.isFinite(n) ? n : fallback
+    } else if (typeof fallback === 'boolean') {
+      next[key] = typeof value === 'boolean' ? value : fallback
+    } else if (fallback === null) {
+      if (value == null) {
+        next[key] = null
+      } else {
+        const n = Number(value)
+        next[key] = Number.isFinite(n) ? n : null
+      }
+    } else if (fallback && typeof fallback === 'object' && !Array.isArray(fallback)) {
+      const given = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+      next[key] = coerceToSchema({ ...fallback, ...given }, fallback)
+    }
+  }
+  return next
+}
+
+/**
+ * Clamp a whole config into legality for the aircraft it names.
+ *
+ * `defaults` is optional only so the two-argument call sites in the tests keep
+ * working; pass it whenever you have it, because it is what makes the numeric
+ * coercion above possible.
+ */
+export function sanitizeConfig(config, aircraft, defaults) {
+  const next = coerceToSchema(config, defaults)
   next.doors = sanitizeDoors(next.doors, aircraft)
   if (next.doorAssignment === 'split_by_aisle' && (aircraft?.aisleCount ?? 1) < 2) {
     next.doorAssignment = 'split_by_row'
@@ -66,9 +111,9 @@ export function makeConfigReducer(defaults) {
         if (action.field === 'aircraftId') {
           // A new airframe has a different door list; adopt its default doors.
           next.doors = defaultDoorsFor(action.aircraft)
-          return sanitizeConfig(next, action.aircraft)
+          return sanitizeConfig(next, action.aircraft, defaults)
         }
-        if (action.field === 'doors') return sanitizeConfig(next, action.aircraft)
+        if (action.field === 'doors') return sanitizeConfig(next, action.aircraft, defaults)
         return next
       }
 
@@ -82,12 +127,12 @@ export function makeConfigReducer(defaults) {
 
       case 'APPLY_PRESET': {
         const merged = { ...defaults, ...pickKnown(action.patch, defaults) }
-        return sanitizeConfig(merged, action.aircraft)
+        return sanitizeConfig(merged, action.aircraft, defaults)
       }
 
       case 'LOAD_CONFIG': {
         const merged = { ...defaults, ...pickKnown(action.config, defaults) }
-        return sanitizeConfig(merged, action.aircraft)
+        return sanitizeConfig(merged, action.aircraft, defaults)
       }
 
       case 'RESET':

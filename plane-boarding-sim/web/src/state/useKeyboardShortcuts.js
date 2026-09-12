@@ -5,6 +5,8 @@
  *   left / right  step 1 s   1 2 3  Cabin / Analytics / Compare
  *   Enter (with meta/ctrl)   run
  *
+ * Ctrl/Cmd+R belongs to the browser and is deliberately not bound.
+ *
  * Never fires while the user is typing in a field, and never while a modal has
  * focus captured.
  */
@@ -46,7 +48,10 @@ export function useKeyboardShortcuts() {
   useEffect(() => {
     function onKeyDown(ev) {
       if (ev.metaKey || ev.ctrlKey || ev.altKey) {
-        if ((ev.key === 'Enter' || ev.key === 'r') && (ev.metaKey || ev.ctrlKey) && !isTypingTarget(ev.target)) {
+        // Ctrl/Cmd+Enter runs. Ctrl/Cmd+R is the browser's reload and stays
+        // the browser's reload — no app shortcut may take a chord the user
+        // reaches for to escape the app.
+        if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey) && !isTypingTarget(ev.target)) {
           ev.preventDefault()
           run()
         }
