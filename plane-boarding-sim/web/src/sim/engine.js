@@ -714,7 +714,25 @@ export function run(cfg, ac = null, recordReplay = false, frameInterval = 0.25) 
       const nOcc = occ.length
       // Furthest-travelled moves first, so a follower sees its leader's updated
       // position within the same tick.
-      sortByKey(walkers, (pid) => ptrav[pid], true)
+      //
+      // A stable descending insertion sort, which is the identical permutation
+      // to Python's `sort(key=..., reverse=True)` -- CPython reverses, sorts
+      // ascending stably, and reverses back, so equal keys keep their original
+      // order, and the `< kv` test below stops on equality for the same reason.
+      // Insertion sort rather than a general sort because this runs once per
+      // lane per tick and the list is almost always already ordered: `ptrav`
+      // only grows, and a passenger just released at the door appends with
+      // `ptrav` zero, which is exactly where descending order wants them.
+      for (let a = 1; a < walkers.length; a++) {
+        const v = walkers[a]
+        const kv = ptrav[v]
+        let b = a - 1
+        while (b >= 0 && ptrav[walkers[b]] < kv) {
+          walkers[b + 1] = walkers[b]
+          b -= 1
+        }
+        walkers[b + 1] = v
+      }
       const arrived = []
       for (const pid of walkers) {
         const i = pidx[pid]

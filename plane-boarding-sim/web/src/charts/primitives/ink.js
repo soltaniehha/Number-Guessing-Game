@@ -17,6 +17,12 @@
 export const INK_DARK = '#000000'
 export const INK_LIGHT = '#ffffff'
 
+/** Their token names — nothing paints a literal hex, that is the house rule. */
+export const INK_VARS = {
+  [INK_DARK]: 'var(--ink-on-fill)',
+  [INK_LIGHT]: 'var(--paper-on-fill)',
+}
+
 /** Parse `#rgb`, `#rrggbb`, `rgb()` / `rgba()` into channel bytes. */
 export function parseColor(value) {
   if (typeof value !== 'string') return null
@@ -91,4 +97,9 @@ export function resolveColor(value, element = null) {
   } catch {
     return ''
   }
+}
+
+/** `labelInk`, as the token reference the renderer actually paints with. */
+export function labelInkVar(fill) {
+  return INK_VARS[labelInk(fill)]
 }

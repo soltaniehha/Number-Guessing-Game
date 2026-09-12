@@ -7,7 +7,7 @@ import { bandScale, cappedBand, bandInset, linearScale } from './primitives/scal
 import { roundedRightRect } from './primitives/shapes.js'
 import { formatPercentValue, formatDurationLong, formatNumber } from './primitives/format.js'
 import { ACTIVITY_SERIES } from './primitives/palette.js'
-import { labelInk, resolveColor } from './primitives/ink.js'
+import { labelInkVar, resolveColor } from './primitives/ink.js'
 import { useThemeVersion } from './primitives/useTheme.js'
 import { useSeries, byMeanAsc, runsLabel, paxCount } from './selectors.js'
 
@@ -37,7 +37,7 @@ export function TimeBreakdown({ batch, hidden, height = null }) {
     void themeVersion
     const map = {}
     for (const activity of ACTIVITY_SERIES) {
-      map[activity.key] = labelInk(resolveColor(activity.color))
+      map[activity.key] = labelInkVar(resolveColor(activity.color))
     }
     return map
   }, [themeVersion])

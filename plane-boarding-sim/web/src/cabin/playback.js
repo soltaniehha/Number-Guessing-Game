@@ -333,3 +333,40 @@ export function formatDuration(seconds) {
 export function formatSpeed(speed) {
   return `${speed}×`
 }
+
+/**
+ * The hover read-out as a sentence.
+ *
+ * The tooltip is the same facts laid out as a definition list; this is what
+ * the keyboard inspector mirrors into the polite region, so the two can never
+ * drift apart. Pure, so it is unit-testable without a DOM.
+ */
+export function describePassenger(replay, paxId, tSeconds, state = STATE.QUEUED) {
+  const pax = replay && paxId >= 0 ? replay.passengers[paxId] : null
+  if (!pax) return ''
+
+  const dt = frameIntervalOf(replay)
+  const entered = enteredFrame(replay, paxId)
+  const seated = seatedFrame(replay, paxId)
+  const enterTime = entered < 0 ? null : entered * dt
+  const sitTime = seated < 0 ? null : seated * dt
+
+  const parts = [
+    `Seat ${pax.seatRow}${pax.seatLetter}`,
+    STATE_NAMES[state] || STATE_NAMES[0],
+    `group ${pax.groupLabel || pax.tier || 'unassigned'}`,
+    pax.party === 1 ? 'travelling solo' : `party of ${pax.party}`,
+    pax.bags === 1 ? '1 bag' : `${pax.bags} bags`,
+  ]
+  if (pax.doorId) parts.push(`door ${pax.doorId}`)
+
+  if (state === STATE.QUEUED) {
+    parts.push(`waiting ${formatDuration(tSeconds)}`)
+  } else if (enterTime !== null) {
+    parts.push(`in the cabin ${formatDuration(Math.max(0, tSeconds - enterTime))}`)
+  }
+  if (state === STATE.SEATED && sitTime !== null) {
+    parts.push(`seated after ${formatDuration(sitTime)}`)
+  }
+  return `${parts.join(', ')}.`
+}

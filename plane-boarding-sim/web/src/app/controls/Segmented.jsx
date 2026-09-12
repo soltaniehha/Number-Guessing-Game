@@ -28,7 +28,13 @@ export function Segmented({ id, label, explain, value, options, disabled, reason
                 data-value={opt.value}
                 tabIndex={rovingTabIndex(options, value, opt.value)}
                 aria-checked={value === opt.value}
-                aria-disabled={disabled || opt.disabled || undefined}
+                // The whole control being irrelevant is aria-disabled, so the
+                // reason stays readable from the focused radio. A single
+                // option being illegal for this airframe is a different thing
+                // and stays `disabled`: it has its own tooltip and the group
+                // around it still works.
+                aria-disabled={disabled || undefined}
+                aria-describedby={disabled ? describedBy : undefined}
                 className={`segmented__item${value === opt.value ? ' is-active' : ''}`}
                 disabled={!disabled && opt.disabled}
                 title={opt.disabled ? opt.reason : undefined}

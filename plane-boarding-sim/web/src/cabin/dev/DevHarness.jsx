@@ -92,9 +92,11 @@ export default function DevHarness() {
           replay={replay}
           tSeconds={clock.t}
           speed={clock.speed}
+          playing={clock.playing}
           showQueue={showQueue}
           showHeat={showHeat}
           orientation={orientation}
+          showLegend={false}
         />
       </main>
 

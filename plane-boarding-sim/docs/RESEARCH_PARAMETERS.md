@@ -548,6 +548,45 @@ and reverse pyramid and WilMA both sit a few points above their published bands.
 The rank order, the twin-aisle reverse-pyramid result and the multi-aisle Steffen
 collapse all survive.
 
+**Two ordering relations are also lost, and this was not visible when the
+decision was taken.** Verified over 8 independent seed bases, 30 replications
+each, a320neo / 1L / 180 pax:
+
+| relation | holds at 0.40 | note |
+|---|---|---|
+| front_to_back > back_to_front | 8/8 | |
+| back_to_front > random | 8/8 | |
+| random > wilma | 8/8 | |
+| random > reverse_pyramid | 8/8 | |
+| wilma > steffen_perfect | 8/8 | |
+| reverse_pyramid > steffen_perfect | 8/8 | |
+| random > steffen_modified > steffen_perfect | 8/8 | |
+| **wilma > reverse_pyramid** | **1/8** | the two land within ~0.1% and the order flips with the seed |
+| **wilma > wilma_zoned** | **2/8** | outside-in x zones no longer beats plain outside-in |
+
+> **Open question, worth a future maintainer's time:** losing
+> `wilma > wilma_zoned` is the one that should not happen. Adding aisle
+> spreading to outside-in ought to help, and under strict blocking it does
+> (0.94 vs 0.90, stable). The testable hypothesis is that **partial blocking
+> reduces the value of spreading**: if a follower can slip past a stowing
+> passenger, then spreading the stowers along the cabin buys less, because the
+> queue behind any one of them was never going to be long. If that is the whole
+> story, the effect should scale smoothly with `stowPassSpeedFactor` -- sweep it
+> and watch the wilma/wilma_zoned gap close monotonically. If it does not,
+> something else is going on in `wilma_zoned` and this is a real bug rather than
+> a consequence.
+
+The published chain therefore holds at 0.40 only as
+`front_to_back > back_to_front > random > {wilma, reverse pyramid} > steffen`,
+with WilMA and reverse pyramid a **tied pair** rather than ordered. Under strict
+blocking the model separates them cleanly (0.94 vs 0.90, stable). The gate in
+`test_strategy_ordering_matches_the_literature` asserts the tied-pair form,
+because asserting a strict order between two strategies that are statistically
+indistinguishable would be asserting noise -- it passed on one seed and failed
+on five before this was caught. Note the literature is weakest exactly here:
+reverse pyramid was never in the Steffen & Hotchkiss experiment and its
+placement rests on simulation consensus alone (§5c).
+
 **If you care more about ratio magnitudes than absolute times, set
 `stowPassSpeedFactor` to 0.** That is one config key, it is a labelled option in
 the control schema, and the table above is the evidence for what it changes:

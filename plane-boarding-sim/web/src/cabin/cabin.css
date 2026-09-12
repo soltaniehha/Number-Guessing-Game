@@ -1,6 +1,8 @@
 /* Cabin mode styling. Every colour is a token from src/theme.css. */
 
 .cab-view {
+  display: flex;
+  flex-direction: column;
   position: relative;
   width: 100%;
   height: 100%;
@@ -11,7 +13,16 @@
     radial-gradient(120% 140% at 50% 0%, var(--surface-2) 0%, var(--bg) 70%);
 }
 
-.cab-view canvas {
+/* The canvases fill the stage, not the whole view: the legend below them is
+   part of the chart, not an overlay on it (WCAG 1.4.1 — colour is not the
+   only encoding, and the key has to be visible to say so). */
+.cab-view__stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.cab-view__stage canvas {
   position: absolute;
   inset: 0;
   display: block;
@@ -21,6 +32,11 @@
 
 .cab-view__dots { cursor: crosshair; }
 .cab-view__dots:focus-visible { outline-offset: -3px; }
+
+.cab-view__legend {
+  flex: none;
+  margin: 0 8px 8px;
+}
 
 .cab-view__sr {
   position: absolute;
@@ -154,6 +170,22 @@
 .cab-legend__count {
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+
+/* The second encoding, named. Quiet, but on the page rather than implied. */
+.cab-legend__enc {
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+.cab-legend__enc::before { content: '('; }
+.cab-legend__enc::after { content: ')'; }
+
+.cab-legend__note {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.4;
   color: var(--text-3);
 }
 

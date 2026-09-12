@@ -18,6 +18,7 @@ export {
   SMOOTH_SPEED_LIMIT,
   advanceTime,
   compressQueue,
+  describePassenger,
   formatClock,
   formatDuration,
   frameCursor,

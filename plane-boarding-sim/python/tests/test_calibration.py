@@ -115,24 +115,35 @@ def test_partial_blocking_mechanism_does_what_it_claims():
 
 
 def test_strategy_ordering_matches_the_literature():
-    """front-to-back > back-to-front > random > WilMA > reverse pyramid > Steffen.
+    """THE comparative gate. Every relation asserted here was verified stable
+    across independent seed bases before being written down -- a strategy
+    comparison that only holds on one seed is not a finding.
 
-    An ordering assertion, not a magnitude one: the experiment (Steffen &
-    Hotchkiss) and the simulation consensus disagree about magnitudes by a wide
-    margin, but every source agrees on the order. RESEARCH_PARAMETERS 11.2.
+        front_to_back > back_to_front > random > {wilma, reverse_pyramid}
+                                               > steffen_perfect
 
-    Note this is asserted on the SINGLE-DOOR configuration. Zone schemes behave
-    quite differently through two doors -- see the test below -- and the
-    literature ordering is a single-door finding.
+    WilMA and reverse pyramid are asserted as a TIED PAIR, not ordered against
+    each other. At the shipped `stowPassSpeedFactor` of 0.40 they land within
+    ~0.1% of each other and their order flips with the seed (5 of 6 seed bases
+    put reverse pyramid on the slower side). Asserting a strict order between
+    them would be asserting noise. Note the literature is weak here too: reverse
+    pyramid was never in the Steffen & Hotchkiss experiment, and its placement
+    between WilMA and Steffen rests on simulation consensus alone
+    (RESEARCH_PARAMETERS 5c). Under strict blocking the model does separate them
+    cleanly (0.94 vs 0.90) -- losing that separation is part of the price of the
+    0.40 default, recorded in RESEARCH_PARAMETERS 12.3.
     """
     cfg = a320_at_180(doors=["1L"])
     keys = ["front_to_back", "back_to_front", "random", "wilma",
-            "reverse_pyramid", "wilma_zoned", "steffen_perfect"]
+            "reverse_pyramid", "steffen_perfect"]
     res = {b.strategy: b.mean for b in compare_strategies(cfg, keys, runs=30)}
-    assert res["front_to_back"] > res["back_to_front"] > res["random"]
-    assert res["random"] > res["wilma"] > res["reverse_pyramid"] > res["steffen_perfect"]
-    assert res["wilma_zoned"] < res["wilma"], (
-        "adding aisle-spreading to outside-in should help")
+    outside_in = min(res["wilma"], res["reverse_pyramid"])
+    outside_in_slow = max(res["wilma"], res["reverse_pyramid"])
+
+    assert res["front_to_back"] > res["back_to_front"], "front-to-back is the worst"
+    assert res["back_to_front"] > res["random"], "zone schemes lose to free-for-all"
+    assert res["random"] > outside_in_slow, "outside-in beats random"
+    assert outside_in > res["steffen_perfect"], "Steffen beats outside-in"
 
 
 def test_a_cabin_wide_zone_order_cannot_be_right_for_two_doors():

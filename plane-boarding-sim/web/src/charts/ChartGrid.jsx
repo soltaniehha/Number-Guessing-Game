@@ -260,7 +260,7 @@ export function ChartGrid({ batch, running = false, className = '' }) {
  *
  * Returns the text to put in the live region, '' before anything has happened.
  */
-function useMilestoneStatus({ strategies, runs, requested, running, complete, notices }) {
+export function useMilestoneStatus({ strategies, runs, requested, running, complete, notices }) {
   const [announcement, setAnnouncement] = useState('')
   const lastKey = useRef(null)
 

@@ -5,6 +5,27 @@
    themes without a second definition.
    ========================================================================== */
 
+/* --------------------------------------------------------- control edges --
+
+   WCAG 1.4.11 wants the boundary of a control to reach 3:1 against what is
+   behind it, and the fills here differ from their surface by almost nothing,
+   so the border is the only thing that says "this is a control".
+
+   --border-strong is the right token for that job and is what every rule
+   below asks for — but as theme.css currently defines it, it measures 1.84:1
+   in light and 1.87:1 in dark against these surfaces, i.e. it does not clear
+   the bar on its own. theme.css belongs to another agent, so rather than
+   redefining a shared token from here, the interactive rules use this local
+   alias: --border-strong pulled 60% of the way towards --text-2, which
+   measures 3.25:1 light / 3.73:1 dark against the lightest and darkest
+   surfaces the app paints. Dividers keep plain --border.
+
+   When --border-strong itself clears 3:1, this alias can become a plain
+   `var(--border-strong)` and nothing else has to change. */
+:root {
+  --control-border: color-mix(in srgb, var(--border-strong) 40%, var(--text-2));
+}
+
 /* ---------------------------------------------------------------- boot --- */
 
 .boot {
@@ -139,7 +160,7 @@
   gap: 2px;
   padding: 3px;
   background: var(--surface-2);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
   /* The tablist scrolls on its own rather than pushing the page wider. */
   min-width: 0;
@@ -185,9 +206,9 @@
   height: 30px;
   padding: 0 12px;
   border-radius: var(--radius-sm);
-  /* Interactive boundaries use --border-strong; --border is for dividers.
+  /* Interactive boundaries use --control-border; --border is for dividers.
      A control whose edge is invisible is not visibly a control (WCAG 1.4.11). */
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--control-border);
   background: var(--surface-2);
   color: var(--text);
   font: inherit;
@@ -196,7 +217,7 @@
   cursor: pointer;
   white-space: nowrap;
 }
-.btn:hover:not(:disabled):not([aria-disabled='true']) { background: var(--surface-3); border-color: var(--border-strong); }
+.btn:hover:not(:disabled):not([aria-disabled='true']) { background: var(--surface-3); border-color: var(--control-border); }
 .btn:disabled,
 .btn[aria-disabled='true'] { opacity: 0.45; cursor: not-allowed; }
 
@@ -361,7 +382,7 @@
   height: 19px;
   border-radius: 999px;
   background: var(--surface-3);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--control-border);
   padding: 2px;
   display: block;
   transition: background 0.14s ease;
@@ -388,7 +409,7 @@
   gap: 2px;
   padding: 2px;
   background: var(--surface-2);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
 }
 .segmented__item {
@@ -434,14 +455,14 @@
   height: 30px;
   padding: 0 9px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--control-border);
   background: var(--surface-2);
   color: var(--text);
   font: inherit;
   font-size: 12.5px;
   width: 100%;
 }
-.input:hover { border-color: var(--border-strong); }
+.input:hover { border-color: var(--text-2); }
 .input--seed { flex: 1; }
 .input--select { cursor: pointer; }
 .input--area {
@@ -462,13 +483,13 @@
   align-items: center;
   gap: 9px;
   padding: 6px 9px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
   background: var(--surface-2);
   cursor: pointer;
 }
-.door:hover { border-color: var(--border-strong); }
-.door.is-on { border-color: color-mix(in srgb, var(--good) 55%, var(--border)); background: color-mix(in srgb, var(--good) 8%, var(--surface-2)); }
+.door:hover { border-color: var(--text-2); }
+.door.is-on { border-color: color-mix(in srgb, var(--good) 75%, var(--control-border)); background: color-mix(in srgb, var(--good) 8%, var(--surface-2)); }
 .door.is-locked { cursor: not-allowed; }
 .door__input[aria-disabled='true'] { cursor: not-allowed; }
 .door__input { accent-color: var(--good); margin: 0; }
@@ -483,7 +504,7 @@
   flex-direction: column;
   gap: 1px;
   padding: 7px 9px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
   background: var(--surface-2);
   color: var(--text-2);
@@ -491,7 +512,7 @@
   cursor: pointer;
   text-align: left;
 }
-.card:hover { border-color: var(--border-strong); color: var(--text); }
+.card:hover { border-color: var(--text-2); color: var(--text); }
 .card.is-active {
   border-color: var(--accent);
   background: var(--accent-soft);
@@ -509,7 +530,7 @@
   flex-direction: column;
   gap: 3px;
   padding: 9px 11px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
   background: var(--surface-2);
   font: inherit;
@@ -639,14 +660,14 @@
   align-items: center;
   gap: 6px;
   padding: 4px 10px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--control-border);
   border-radius: 999px;
   background: var(--surface);
   font-size: 11.5px;
   color: var(--text-2);
   cursor: pointer;
 }
-.chip:hover { border-color: var(--border-strong); }
+.chip:hover { border-color: var(--text-2); }
 .chip.is-on { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
 .chip input { accent-color: var(--accent); margin: 0; }
 
@@ -724,7 +745,7 @@
 }
 .scrub::-moz-range-thumb { width: 13px; height: 13px; border-radius: 50%; background: var(--accent); border: 2px solid var(--surface); }
 
-.speeds { display: flex; gap: 1px; padding: 2px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); }
+.speeds { display: flex; gap: 1px; padding: 2px; background: var(--surface-2); border: 1px solid var(--control-border); border-radius: var(--radius-sm); }
 .speeds__item {
   padding: 3px 7px;
   border: 0;

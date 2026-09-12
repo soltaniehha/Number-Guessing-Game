@@ -4,6 +4,11 @@
  * The state glyphs are the same four shapes the canvas paints, so the legend
  * is a literal sample rather than an approximation — which is what makes the
  * view colour-blind safe: shape carries the meaning, colour reinforces it.
+ *
+ * Both channels are therefore NAMED here, not merely shown. A key that only
+ * puts a coloured mark next to a word leaves colour as the sole encoding for
+ * anyone who cannot separate the four hues (WCAG 1.4.1); saying "hollow ring"
+ * next to the hollow ring is what makes the shape channel usable.
  */
 
 import './cabin.css'
@@ -11,10 +16,16 @@ import { STATE } from './playback.js'
 import { classToken, stateToken } from './tokens.js'
 
 const STATE_ITEMS = [
-  { state: STATE.QUEUED, label: 'Queued', glyph: 'hollow' },
-  { state: STATE.WALKING, label: 'Walking', glyph: 'trail' },
-  { state: STATE.STOWING, label: 'Stowing', glyph: 'ring' },
-  { state: STATE.SEATED, label: 'Seated', glyph: 'filled' },
+  { state: STATE.QUEUED, label: 'Queued', glyph: 'hollow', shape: 'hollow ring', colour: 'red' },
+  { state: STATE.WALKING, label: 'Walking', glyph: 'trail', shape: 'dot with a trail', colour: 'blue' },
+  {
+    state: STATE.STOWING,
+    label: 'Stowing or shuffling',
+    glyph: 'ring',
+    shape: 'dot inside a ring',
+    colour: 'amber',
+  },
+  { state: STATE.SEATED, label: 'Seated', glyph: 'filled', shape: 'solid dot', colour: 'green' },
 ]
 
 export default function CabinLegend({
@@ -34,6 +45,9 @@ export default function CabinLegend({
           <span className="cab-legend__item" key={item.label}>
             <StateGlyph glyph={item.glyph} state={item.state} />
             {item.label}
+            <span className="cab-legend__enc">
+              {item.colour}, {item.shape}
+            </span>
             {showCounts && counts ? (
               <span className="cab-legend__count">
                 {item.state === STATE.STOWING
@@ -59,6 +73,11 @@ export default function CabinLegend({
           ))}
         </div>
       ) : null}
+
+      <p className="cab-legend__note">
+        Every state is drawn as a shape as well as a colour, so the cabin still
+        reads if the four hues are hard to tell apart.
+      </p>
     </div>
   )
 }

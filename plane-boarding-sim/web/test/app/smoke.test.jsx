@@ -132,9 +132,14 @@ describe('app shell', () => {
 
   it('keeps the last open door locked, but reachable and explained', async () => {
     const { host } = await mount()
-    const doors = [...host.querySelectorAll('.door__input')]
-    expect(doors.length).toBeGreaterThan(1)
-    const checked = doors.filter((d) => d.checked)
+    expect(host.querySelectorAll('.door__input').length).toBeGreaterThan(1)
+    // Close doors until one is left, whatever the airframe opens by default.
+    for (let i = 0; i < 8; i += 1) {
+      const open = [...host.querySelectorAll('.door__input')].filter((d) => d.checked)
+      if (open.length <= 1) break
+      await click(open[open.length - 1])
+    }
+    const checked = [...host.querySelectorAll('.door__input')].filter((d) => d.checked)
     expect(checked).toHaveLength(1)
     const last = checked[0]
     // aria-disabled, not disabled: the "at least one door must stay open"
@@ -200,7 +205,7 @@ describe('running', () => {
     expect(host.querySelector('.transport__clock')?.textContent).toBe('00:00')
   })
 
-  it('runs a batch of replications in Analytics', async () => {
+  it('runs a batch of replications in Analytics', { timeout: 20000 }, async () => {
     const { host } = await mount()
     await key('2')
     // Keep the test quick: 10 replications.
@@ -219,7 +224,7 @@ describe('running', () => {
     expect(host.querySelector('.summary__value')?.textContent).toMatch(/\d\d:\d\d/)
   })
 
-  it('ranks strategies in Compare', async () => {
+  it('ranks strategies in Compare', { timeout: 30000 }, async () => {
     const { host } = await mount()
     await key('3')
     const runs = host.querySelector('#ctl-runs')

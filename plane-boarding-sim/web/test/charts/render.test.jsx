@@ -203,10 +203,12 @@ describe('ChartGrid', () => {
     expect(container.querySelectorAll('.cg-card.is-wide')).toHaveLength(0)
   })
 
-  it('reports streaming progress in a live region', () => {
+  it('reports streaming progress on screen, and milestones in the live region', () => {
     const { container } = render(<ChartGrid batch={streaming} running />)
-    const status = container.querySelector('[role="status"]')
-    expect(status.textContent).toMatch(/Streaming/)
+    // The precise running total is ordinary text: it changes several times a
+    // second, so announcing it would flood the polite queue (see a11y.test).
+    expect(container.querySelector('.cg-status').textContent).toMatch(/Streaming/)
+    expect(container.querySelector('[role="status"]').textContent).toMatch(/Run started/)
   })
 
   it('renders from nothing at all', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { makeConfigReducer, sanitizeConfig, sanitizeDoors, configDiff, deepEqual, pickKnown } from '../../src/state/configReducer.js'
+import { coerceToSchema, makeConfigReducer, sanitizeConfig, sanitizeDoors, configDiff, deepEqual, pickKnown } from '../../src/state/configReducer.js'
 import { defaults, a320, e175, b777, engine } from './fixtures.js'
 
 const reducer = makeConfigReducer(defaults)
@@ -107,5 +107,68 @@ describe('helpers', () => {
 
   it('pickKnown keeps only keys the engine defines', () => {
     expect(pickKnown({ loadFactor: 0.5, madeUp: 1 }, engine.DEFAULTS)).toEqual({ loadFactor: 0.5 })
+  })
+})
+
+describe('sanitizeConfig / coerceToSchema (non-finite input)', () => {
+  it('replaces a non-numeric numeric field with its default instead of NaN', () => {
+    const next = sanitizeConfig({ ...defaults, loadFactor: 'banana' }, a320, defaults)
+    expect(next.loadFactor).toBe(defaults.loadFactor)
+    expect(Number.isFinite(next.loadFactor)).toBe(true)
+  })
+
+  it('rejects every shape of non-finite value, not just strings', () => {
+    for (const junk of ['banana', NaN, Infinity, -Infinity, null, undefined, {}, [], true]) {
+      const next = sanitizeConfig({ ...defaults, walkSpeedMean: junk }, a320, defaults)
+      expect(Number.isFinite(next.walkSpeedMean), String(junk)).toBe(true)
+    }
+  })
+
+  it('covers every numeric key, not just the three that were clamped', () => {
+    const poisoned = {}
+    for (const [key, value] of Object.entries(defaults)) {
+      if (typeof value === 'number') poisoned[key] = 'banana'
+    }
+    expect(Object.keys(poisoned).length).toBeGreaterThan(10)
+    const next = sanitizeConfig({ ...defaults, ...poisoned }, a320, defaults)
+    for (const key of Object.keys(poisoned)) {
+      expect(Number.isFinite(next[key]), key).toBe(true)
+      expect(next[key], key).toBe(defaults[key])
+    }
+  })
+
+  it('cleans nested numeric maps too', () => {
+    const next = sanitizeConfig(
+      { ...defaults, shuffleMovements: { ...defaults.shuffleMovements, both: 'banana' }, bagWeights: { 0: 'x', 1: 0.5, 2: 0.5 } },
+      a320,
+      defaults,
+    )
+    expect(next.shuffleMovements.both).toBe(defaults.shuffleMovements.both)
+    expect(next.bagWeights['0']).toBe(defaults.bagWeights['0'])
+    expect(next.bagWeights['1']).toBe(0.5)
+  })
+
+  it('keeps numeric strings that do name a number', () => {
+    const next = sanitizeConfig({ ...defaults, loadFactor: '0.5', runs: '25' }, a320, defaults)
+    expect(next.loadFactor).toBe(0.5)
+    expect(next.runs).toBe(25)
+  })
+
+  it('accepts null for the nullable numeric parameters and nothing else', () => {
+    expect(coerceToSchema({ binBagsPerRowSide: null }, defaults).binBagsPerRowSide).toBeNull()
+    expect(coerceToSchema({ binBagsPerRowSide: 'banana' }, defaults).binBagsPerRowSide).toBeNull()
+    expect(coerceToSchema({ binBagsPerRowSide: 5 }, defaults).binBagsPerRowSide).toBe(5)
+  })
+
+  it('holds booleans to their type rather than to truthiness', () => {
+    expect(coerceToSchema({ keepPartiesTogether: 'false' }, defaults).keepPartiesTogether)
+      .toBe(defaults.keepPartiesTogether)
+    expect(coerceToSchema({ keepPartiesTogether: false }, defaults).keepPartiesTogether).toBe(false)
+  })
+
+  it('LOAD_CONFIG never lets NaN through into the config', () => {
+    const next = reducer(defaults, { type: 'LOAD_CONFIG', config: { loadFactor: 'banana', zoneCount: 'x' }, aircraft: a320 })
+    expect(next.loadFactor).toBe(defaults.loadFactor)
+    expect(next.zoneCount).toBe(defaults.zoneCount)
   })
 })

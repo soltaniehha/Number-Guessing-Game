@@ -70,6 +70,14 @@
   --heat-4: #f97316;
   --heat-5: #dc2626;
 
+  /* Ink for text painted ON a data colour (stacked-bar value labels). The
+     two extremes, not the theme's text tokens: on --state-waiting even
+     --text only reaches 4.25:1, while black reaches 4.81:1. Which of the two
+     is used is decided per fill from its measured luminance, so these do NOT
+     flip with the theme. */
+  --ink-on-fill:   #000000;
+  --paper-on-fill: #ffffff;
+
   /* semantic */
   --good:  #16a34a;
   --warn:  #d97706;
