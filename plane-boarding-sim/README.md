@@ -12,31 +12,74 @@ airline industry's boarding schemes come out like this:
 | 12= | Back-to-front zones | 18:52 | +15.2% |
 | 15= | Front-to-back zones | 24:03 | +46.8% |
 
-Four things in that table are worth the trouble of a simulator:
+**The finding, in one line: what the spatial ordering earns, the commercial
+ladder gives back.**
+
+Boarding order is two different products sold as one, and the cleanest place to
+see them come apart is the same aeroplane with its second door open — the
+configuration a flow rule is actually designed for, and the one the section
+*Open the second door* below works through in full. Every number in this
+paragraph is from there, not from the single-door table above.
+
+As a flow rule, boarding order works. `wilma_zoned` — window → middle → aisle,
+crossed with rear-to-front — boards in **0.942×** a free-for-all, 39 seconds
+faster on a paired test whose interval is nowhere near zero. As a commercial
+instrument it undoes itself. Merge a fare and status ladder into that same
+spatial rule, which is what selling boarding position requires, and the
+advantage is gone: `southwest_2026`, the scheme a real airline actually shipped
+on 27 January 2026, comes out at **1.053** — 36 seconds *slower* than a
+free-for-all, interval clear of zero. Our own `common_sense_5tier`, which merges
+the ladder more carefully and beats Southwest's design on 8 of 8 independent
+seed bases, still only reaches **1.027**, an interval spanning zero: a tie with
+boarding at random. The 39 seconds the ordering earns come back as a 75-second
+swing in one case and a 57-second swing in the other.
+
+The reason is the same in both, and it is not a flaw in either design. Status
+concentrates passengers in the forward rows — premium cabins are forward by
+definition, and Comfort+ / Economy Plus / Main Cabin Extra sit immediately
+behind them — so a commercial ladder is a **near-door-first rule wearing a
+loyalty programme**. Door-awareness cannot repair that, because it is not a
+spatial rule to begin with: it orders by who paid, and where they sit is a
+correlation, not the criterion. So the conclusion is not that airlines are doing
+it wrong. It is narrower and more awkward than that — **an airline that wants
+the flow benefit has to stop selling the thing that cancels it.** Nothing in the
+model says that trade is a bad one; priority boarding is revenue, and this
+measures only the time.
+
+Read all of it as a result about one model with a documented calibration
+trade-off (below, and `docs/RESEARCH_PARAMETERS.md` §12.3), not as a measurement
+of real aircraft.
+
+Four more things in that table are worth the trouble of a simulator:
 
 - **Random boarding beats most zone schemes.** Not a quirk of this model — it
   is the literature's oldest inconvenient result, and it reproduces here.
   A free-for-all spreads people along the aisle; calling one band of rows at a
   time concentrates them.
 - **The revenue-driven scheme airlines actually use is slower than a
-  free-for-all**, by 53 seconds on a paired test that is comfortably
-  significant. Status flyers sit in the forward rows — Comfort+, Economy Plus,
-  Main Cabin Extra — and premium cabins are forward by definition, so calling
-  the top tiers first is a front-to-back boarding wearing a loyalty programme.
-  The simulator models that explicitly (`eliteForwardBias`); with status spread
-  evenly down the cabin the same scheme is only a hair slower than random,
-  which flattered it considerably.
-- **Southwest's real January 2026 scheme is a statistical tie with random.**
-  Given a blank sheet after 53 years of open seating, Southwest chose
-  window → middle → aisle boarded rear-to-front, then merged their fare and
-  status ladder into it. The flow logic on its own (`wilma_zoned`) is worth
-  about 6%; the same spatial ordering with the ladder merged in is worth
-  1.3% with an interval that spans zero. That is not a criticism of Southwest.
-  It is the price of the commercial constraint, measured.
+  free-for-all**, by 53 seconds through one door on a paired test that is
+  comfortably significant. The simulator models the forward concentration of
+  status explicitly (`eliteForwardBias`); with status spread evenly down the
+  cabin the same scheme is only a hair slower than random, which flattered it
+  considerably. Open the second door and `priority_5tier` recovers to a tie
+  (0.992, interval spanning zero): two doors work the front and the back of the
+  cabin in parallel, so concentrating the early callers at the nose costs much
+  less. That is the only remedy here that does not require changing what is
+  sold — and it is an airframe and gate decision, not a boarding-order one.
+- **Southwest's real January 2026 scheme is a statistical tie with random
+  through one door**, and measurably slower than random through two. Given a
+  blank sheet after 53 years of open seating, Southwest chose window → middle →
+  aisle boarded rear-to-front, then merged their fare and status ladder into it.
+  That is not a criticism of Southwest. It is the price of the commercial
+  constraint, measured.
 - **On a twin-aisle 777, Steffen's famous advantage collapses to nothing** —
-  +0:11 against random, interval spanning zero, while reverse pyramid quietly
-  wins. With enough aisles, congestion stops being the binding constraint, and
-  clever sequencing was only ever fixing congestion.
+  +0:08 against random over 20 replications, an interval spanning zero, sharing
+  a rank with the free-for-all itself while `slowest_first`, `wilma_zoned`,
+  `reverse_pyramid`, `southwest_2026`, `wilma` and `common_sense_5tier` all
+  finish ahead of it. With enough aisles, congestion stops being the binding
+  constraint, and clever sequencing was only ever fixing congestion; what is
+  left to win is variance, which is why the strategy that boards the slowest
+  passengers first comes out on top.
 
 Boarding Lab is a discrete-time simulator built to produce numbers like those
 with error bars attached: a Python reference engine, a bit-identical JavaScript
@@ -91,7 +134,7 @@ Roughly 70 seconds.
 ----------------------------------------------------------------------------------------------------------------------
    1  steffen_perfect        13:53    21.0  16:07   0.848  -2:30 [-2:54,-2:05]         +0.02  ██████████░░░░░░░░
   =2  steffen_modified       15:03    20.8  17:13   0.918  -1:20 [-1:41,-1:00]         -0.00  ███████████░░░░░░░
-  =2  slowest_first          15:05    24.7  17:05   0.921  -1:17 [-1:38,-0:57]         +0.01  ███████████░░░░░░░
+  =2  slowest_first          15:06    24.7  17:05   0.922  -1:17 [-1:38,-0:57]         +0.01  ███████████░░░░░░░
   =2  wilma                  15:12    26.9  17:12   0.928  -1:11 [-1:37,-0:45]         -0.00  ███████████░░░░░░░
   =2  wilma_zoned            15:19    23.8  17:20   0.935  -1:04 [-1:25,-0:43]         +0.17  ███████████░░░░░░░
   =2  reverse_pyramid        15:21    23.1  17:06   0.937  -1:02 [-1:26,-0:37]         +0.18  ███████████░░░░░░░
@@ -128,6 +171,89 @@ paired intervals are narrow enough to separate strategies whose absolute times
 overlap heavily, and why `=` ties are reported as ties rather than ordered by
 noise.
 
+### Open the second door
+
+Everything above is a single-door boarding, which is the configuration
+Schultz's field regression describes and the one the model is calibrated
+against. It is also the configuration in which the difference between a good
+flow rule and a commercial ladder is smallest, because with one door every
+sensible spatial rule reduces to "far end first" and there is nothing for it to
+disagree with.
+
+```
+$ cd python && python3 -m plane_boarding.cli compare --aircraft a320neo \
+      --doors 1L 2L --runs 40
+======================================================================================================================
+ Airbus A320neo  —  40 replications per strategy, 171 passengers, doors 1L,2L
+ ranked fastest first by the PAIRED comparison against free-for-all
+======================================================================================================================
+   #  strategy                mean  +/-95%    p95  vs rnd  paired vs random (95% CI) far-1st  relative time
+----------------------------------------------------------------------------------------------------------------------
+   1  steffen_perfect         9:26    16.9  10:49   0.831  -1:55 [-2:10,-1:39]         -0.01  ██████████░░░░░░░░
+  =2  steffen_modified       10:16    16.7  11:54   0.905  -1:04 [-1:19,-0:49]         -0.03  ███████████░░░░░░░
+  =2  wilma                  10:22    18.8  11:43   0.914  -0:58 [-1:15,-0:42]         -0.02  ███████████░░░░░░░
+  =4  slowest_first          10:33    18.7  12:04   0.931  -0:47 [-1:04,-0:30]         -0.03  ███████████░░░░░░░
+  =4  wilma_zoned            10:41    22.8  12:47   0.942  -0:39 [-0:58,-0:21]         +0.06  ███████████░░░░░░░
+  =6  reverse_pyramid        11:05    27.7  12:50   0.977  -0:15 [-0:37,+0:06]  ns     +0.07  ████████████░░░░░░
+  =6  priority_5tier         11:15    21.0  12:57   0.992  -0:06 [-0:21,+0:10]  ns     -0.03  ████████████░░░░░░
+  =6  random                 11:21    17.8  12:44   1.000  (baseline)                  -0.02  ████████████░░░░░░
+  =9  by_bags                11:29    20.6  13:18   1.012  +0:08 [-0:04,+0:21]  ns     -0.03  ████████████░░░░░░
+  =9  common_sense_5tier     11:39    28.5  14:50   1.027  +0:18 [-0:03,+0:39]  ns     +0.08  ████████████░░░░░░
+  11  southwest_2026         11:56    24.7  14:04   1.053  +0:36 [+0:12,+1:00]         +0.07  █████████████░░░░░
+ =12  rotating_zone          13:15    26.3  15:16   1.168  +1:54 [+1:32,+2:17]         +0.06  ██████████████░░░░
+ =12  back_to_front          13:29    29.5  15:53   1.188  +2:08 [+1:41,+2:35]         +0.16  ██████████████░░░░
+ =12  block_boarding         13:29    29.5  15:53   1.188  +2:08 [+1:41,+2:35]         +0.16  ██████████████░░░░
+ =12  open_seating           13:30    30.5  16:33   1.190  +2:10 [+1:36,+2:43]         +0.06  ██████████████░░░░
+  16  front_to_back          16:59    33.1  19:36   1.497  +5:38 [+5:12,+6:04]         -0.20  ██████████████████
+----------------------------------------------------------------------------------------------------------------------
+   [ same legend as above ]
+ best: Steffen (perfect)  —  1:55 faster than free-for-all (16.9%)
+ seat interference (mean events/run):  steffen_perfect=21   steffen_modified=22   wilma=20   slowest_first=34
+ door sequencing: 'front_to_back' scores -0.20 -- it loads the rows NEAREST a door first, which is the front-to-back pathology in miniature.
+   -> With two doors a single cabin-wide zone order cannot be right for both: calling the rear zone first is far-end-first at 1L and near-end-first at 2L. Zone order has to be set per door.
+======================================================================================================================
+```
+
+That last footnote is the engine telling on the naive implementation, and it is
+worth following. With two doors there is no single cabin-wide zone order that is
+right for both of them: calling the rear zone first is far-end-first at 1L and
+**near**-end-first at 2L, which is the front-to-back pathology in miniature. So
+spatially ordered strategies sequence within each door's own region instead
+(`doorAwareZones`, on by default; ENGINE_SPEC §4.1). Turn it off and you get the
+cabin-wide order every published zone scheme actually describes:
+
+```
+$ cd python && python3 -m plane_boarding.cli compare --aircraft a320neo \
+      --doors 1L 2L --runs 40 --set doorAwareZones=false
+```
+
+| strategy | cabin-wide | per-door | |
+|---|---|---|---|
+| `steffen_perfect` | 0.910 | **0.831** | the waves now sweep outward from each door |
+| `wilma_zoned` | 0.980 | **0.942** | the flow result the finding above rests on |
+| `common_sense_5tier` | 1.088 | **1.027** | |
+| `reverse_pyramid` | 0.993 | **0.977** | |
+| `southwest_2026` | 1.056 | 1.053 | barely moves: the ladder, not the geometry, is binding |
+| `back_to_front` | 1.182 | 1.188 | |
+| `rotating_zone` | 1.191 | **1.168** | |
+| `front_to_back` | **1.124** | 1.497 | |
+
+`front_to_back` getting dramatically worse is the mechanism working, not
+failing. The cabin-wide version was accidentally half-right: front-first is the
+pathology at the forward door but the *correct* far-end-first order at the aft
+one, so half the aeroplane was being boarded sensibly by mistake. Measure
+position from each passenger's own door and the control strategy is allowed to
+be as bad as it is supposed to be. It is also the clearest thing to look at
+first in the app: it is one switch in the Behaviour section, live whenever two
+doors are open and the strategy orders by position along the cabin, and dead
+with a stated reason when it cannot do anything.
+
+Note what does **not** move. `southwest_2026` shifts by 0.003 and
+`priority_5tier` not at all — the latter never asks where anyone sits, so there
+is no region for it to be measured in. That is the finding above restated as a
+null result: door-awareness is a spatial fix, and the thing cancelling the flow
+benefit is not spatial.
+
 ---
 
 ## The sixteen strategies
@@ -152,8 +278,24 @@ who flies it and where the claim comes from.
 | `rotating_zone` | Alternates rearmost and foremost bands so the two flows interleave. | 1.15 |
 | `back_to_front` | Contiguous bands, rearmost first. Intuitive, reliably poor. | 1.15 |
 | `block_boarding` | Premium cabin, then rear-to-front blocks. The pre-status-tier standard. | 1.15 |
-| `open_seating` | No assigned seats; pick one on entering. Southwest, 1971–2026. Retired, and slow here because everyone hunts. | 1.44 |
+| `open_seating` | No assigned seats; pick one on entering. Southwest, 1971–2026. Retired, and the slowest thing here that anyone ever actually flew — see the caveat below, which is a limitation of the model rather than a finding. | 1.44 |
 | `front_to_back` | Foremost band first. The pathological control: everyone walks past everyone. | 1.47 |
+
+**The open-seating number is the one to distrust.** At 1.44 through one door it
+is slower than every scheme in the table bar the pathological control, and on
+the 777 it is slower than that too — which contradicts open seating's
+reputation, and an earlier version of these docs called it "interestingly fast,
+because people self-select to avoid each other". That claim had no citation
+behind it and the model contradicts it, but the model is not evidence against
+it either: the self-selection that would make open seating quick is
+*interference* avoidance — declining a seat that means climbing over a stranger,
+which produces window-first filling for free — and **none of the four
+open-seating policies models that**. They choose on position or spacing alone.
+Read 1.44 as "open seating with no interference avoidance", which is a property
+of the policy set, not of open seating. `docs/STRATEGIES.md` §11 and
+`docs/RESEARCH_PARAMETERS.md` §12.2 record it as a known gap; closing it needs a
+source for how passengers trade spacing against interference, and none was
+reachable.
 
 Four things are applied on top of whatever a strategy returns, in this order:
 preboards to the front, party cohesion (a booking boards whole, at its
@@ -224,9 +366,9 @@ effect outside-in methods exist to exploit.
 
 The acceptance test is Schultz's regression over **282 measured single-aisle
 boardings**: `T ≈ 4.5N + 138 s`, so 948 s for 180 passengers, with a ±15% band.
-The model lands inside it — 1054 s for random boarding on a single-door A320neo
-at 180 passengers, against a 806–1090 s band — and the strategy ordering
-assertion (`front-to-back > back-to-front > random > {WilMA, reverse pyramid} >
+The model lands inside it — 1052 s for random boarding on a single-door A320neo
+at 180 passengers over 30 replications, against a 806–1090 s band — and the
+strategy ordering assertion (`front-to-back > back-to-front > random > {WilMA, reverse pyramid} >
 Steffen`) holds as a hard test, not an aspiration.
 
 **The trade-off is real and it is recorded, not hidden.** Hitting that absolute
@@ -236,9 +378,10 @@ aisle — overshoots the field regression by about 50% on single-door boarding.
 But partial blocking **compresses the differences between strategies**: a
 shorter queue behind a stower makes avoiding a stow-block worth less, and
 avoiding stow-blocks is most of what outside-in and Steffen buy you. Our
-Steffen advantage reads 16% where Schultz's realistic figure is 20–25%, and
-WilMA and reverse pyramid both sit a few points above their published bands and
-can no longer be told apart from each other.
+Steffen advantage reads 15.2% in the run above (16% at §12.3's 180 passengers)
+where Schultz's realistic figure is 20–25%, and WilMA and reverse pyramid both
+sit a few points above their published bands and can no longer be told apart
+from each other.
 
 If you care more about relative magnitudes than absolute times, that is one
 config key: set `stowPassSpeedFactor` to 0 (it is a labelled control in the
@@ -246,17 +389,20 @@ panel, *Squeeze past a stower*, and `--set stowPassSpeedFactor=0` on the CLI).
 Steffen returns to 0.78 and reverse pyramid to 0.90, at the cost of every
 absolute time being about half an hour wrong on a twenty-minute process. The
 full sweep, both candidate models, and the reasoning for shipping 0.40 are in
-`docs/RESEARCH_PARAMETERS.md` §12.3, including the one ordering relation that
-is lost and should not be (`wilma > wilma_zoned`) and a testable hypothesis for
-why.
+`docs/RESEARCH_PARAMETERS.md` §12.3, including the two ordering relations that
+are lost (`wilma > reverse_pyramid`, which becomes a tie, and
+`wilma > wilma_zoned`, which should not be lost at all) and a testable
+hypothesis for the second.
 
 **Do not read more into the absolute numbers than that.** This is a
 one-dimensional aisle with no galley queues, no wheelchair logistics, no
 gate-agent behaviour and no boarding-pass scan queue upstream of the door. The
 bin walk-back and gate-check penalties are extrapolation rather than
 literature — no boarding paper publishes them — and they are flagged as such
-where they are defined. What the model is for is *comparisons under identical
-passengers*, and it reports every one of those with an interval.
+where they are defined, as is the missing interference-avoidance term that makes
+the open-seating figure a statement about the policy set rather than about open
+seating. What the model is for is *comparisons under identical passengers*, and
+it reports every one of those with an interval.
 
 ---
 
@@ -298,6 +444,55 @@ PASS  engine  (15 entries identical)
 All parity checks passed. Both engines are behaviourally identical.
 ```
 
+**That gate is a hash of a summary, and it is worth being exact about what a
+pass proves.** The digest covers totals, the breakdowns, the counts, a 10 s-grid
+seated curve and the first twenty sit times — enough to catch gross divergence
+in seconds, which is why it is the gate that runs on every change. It is not
+enough to prove the engines agree. Two runs can produce the same total seconds,
+the same interference histogram and the same first twenty sit times while
+disagreeing about passenger 140's blocked time, and per-passenger differences
+like that are exactly what later turns into a wrong chart.
+
+```
+make parity-full
+```
+
+is the check that actually proved the port. 16 strategies × 6 aircraft × 4
+configurations = **384 scenarios**, comparing **complete `RunResult` documents
+field by field with no tolerance at all**: every per-passenger record, both
+curves, the congestion matrix, the door statistics. Not a digest of them, and
+not a comparison to 1e-6 — the same value or a failure. Run it before a release
+and after any change to the engine.
+
+```
+==============================================================
+ Cross-language parity: Python engine  vs  JavaScript engine
+==============================================================
+PASS  rng  (17 entries identical)
+PASS  engine  (15 entries identical)
+      running the 384-scenario exact diff; this takes a few minutes
+      32 scenarios identical so far...
+      64 scenarios identical so far...
+      96 scenarios identical so far...
+      128 scenarios identical so far...
+      160 scenarios identical so far...
+      192 scenarios identical so far...
+      224 scenarios identical so far...
+      256 scenarios identical so far...
+      288 scenarios identical so far...
+      320 scenarios identical so far...
+      352 scenarios identical so far...
+      384 scenarios identical so far...
+PASS  full  (384 scenarios, complete RunResults identical field for field)
+==============================================================
+All parity checks passed. Both engines are behaviourally identical.
+```
+
+It took 37 s here against 2.5 s for `make parity` — its own progress line says
+"a few minutes", which is pessimistic on this machine and may not be on yours.
+The fast one is the gate; the exact one is the proof; at well under a minute
+there is not much reason to skip the proof.
+
 ---
 
 ## The web app
@@ -323,8 +518,13 @@ Three modes over one control panel, all in the browser with no server.
 
 The control panel exposes every simulation parameter in seven sections, each
 control showing its live value and one line of plain English about what it
-physically means. A control that cannot affect the current scenario is disabled
-and says why. Eight presets — including Southwest before and after January
+physically means. A control that cannot affect the current scenario is
+`aria-disabled` and its help line is replaced by the reason — still focusable,
+so the explanation reaches the people who most need it, and the handler simply
+refuses the change. *Zones measured per door* is the one to try first: switch to
+a two-door aircraft and a strategy that orders by position along the cabin, flip
+it, and watch `front_to_back` get much worse. Pick a single-door airframe and it
+goes dead and tells you why. Eight presets — including Southwest before and after January
 2026, on the same aircraft, as a built-in A/B. Config copies to JSON or to a
 shareable URL. Dark by default with a light theme; keyboard shortcuts for
 play/pause, step, reset and mode; responsive down to 400 px.
@@ -337,10 +537,12 @@ selling priority boarding cost time?" from an assertion into a measurement:
 
 ```
 $ make sweep
+========================================================================================
  Airbus A320neo  —  boarding time vs forward concentration of status (20 replications per point)
+========================================================================================
 
   5-tier priority (revenue)
-    eliteForw   pax    mean  s/pax
+    eliteForw   pax    mean  s/pax  
         0.000   171   16:38   5.83  █████████████████████████████░
         0.250   171   16:27   5.77  ████████████████████████████░░
         0.500   171   16:39   5.84  █████████████████████████████░
@@ -348,17 +550,21 @@ $ make sweep
         1.000   171   17:22   6.09  ██████████████████████████████
 
   Random / free-for-all
-    eliteForw   pax    mean  s/pax
+    eliteForw   pax    mean  s/pax  
         0.000   171   16:14   5.70  ████████████████████████████░░
         0.250   171   16:14   5.70  ████████████████████████████░░
         0.500   171   16:14   5.70  ████████████████████████████░░
         0.750   171   16:14   5.70  ████████████████████████████░░
         1.000   171   16:14   5.70  ████████████████████████████░░
+========================================================================================
 ```
 
 Priority boarding costs 44 seconds as status concentrates forward; the
 free-for-all does not move at all, which is the control that says the parameter
-is doing what it claims. Preboarding rate is the other axis worth a look —
+is doing what it claims. That curve is the mechanism behind the finding at the
+top of this file, isolated: nothing about the boarding *order* changes across
+those five rows, only where in the cabin status sits. Preboarding rate is the
+other axis worth a look —
 above roughly 15% of the cabin the preboard block, not the boarding order, sets
 the time, and that is a regime change rather than a shift in a number.
 
@@ -375,14 +581,14 @@ docs/RESEARCH_AIRCRAFT.md    Every seat map, its source, and its confidence.
 docs/RESEARCH_AIRLINES.md    What real carriers board like, in 2025-26.
 
 python/plane_boarding/       Reference engine + CLI (no dependencies).
-python/tests/                298 tests, including the calibration gates.
+python/tests/                363 tests, including the calibration gates.
 
 web/src/sim/                 The JavaScript port. Bit-identical.
 web/src/cabin/               Canvas seat-map renderer and playback.
 web/src/charts/              Twelve charts, hand-rolled SVG.
 web/src/app/                 Shell: modes, control panel, presets.
 web/src/state/               Config reducer, batch driver, aggregation.
-web/test/                    978 tests.
+web/test/                    1105 tests.
 
 parity/                      Shared constants + the cross-language harness.
   defaults.json                Every default parameter. Both engines read it.
@@ -394,9 +600,10 @@ parity/                      Shared constants + the cross-language harness.
 
 ```
 make test        # pytest, vitest and the parity harness
-make test-py     # 298 tests
-make test-js     # 978 tests
-make parity      # both engines, same digest
+make test-py     # 363 tests, ~3 min (the calibration gates are batch runs)
+make test-js     # 1105 tests, ~25 s
+make parity      # both engines, same digest -- the gate, 2.5 s
+make parity-full # both engines, 384 complete results, exact -- the proof, 37 s
 make lint        # eslint
 ```
 
@@ -406,7 +613,11 @@ Schultz's regression, and `test_strategy_ordering_matches_the_literature` fails
 if the published ranking stops holding. Conservation tests assert every
 passenger boards exactly once into a seat that exists, for every strategy on
 every airframe through every boardable door combination. Determinism tests
-assert that `(config, seed)` reproduces the event log exactly.
+assert that `(config, seed)` reproduces the event log exactly. The two-door
+contrast above is pinned there too: `test_calibration.py` asserts that
+`doorAwareZones` is inert to the second through one door, and that through two
+it turns the worst door's sequencing score from firmly negative — near-door
+first, the pathology — to firmly positive.
 
 ## Provenance
 

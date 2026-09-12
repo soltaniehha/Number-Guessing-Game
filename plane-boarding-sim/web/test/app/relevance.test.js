@@ -1,6 +1,6 @@
 /** Which controls are live, and why the dead ones are dead. */
 import { describe, expect, it } from 'vitest'
-import { relevanceOf, optionRelevance, ZONE_STRATEGIES } from '../../src/state/relevance.js'
+import { relevanceOf, optionRelevance, SPATIAL_STRATEGIES, ZONE_STRATEGIES } from '../../src/state/relevance.js'
 import { presentControls, SECTIONS, rootKey } from '../../src/app/controlSchema.js'
 import { defaults, a320, e175, b777, engine } from './fixtures.js'
 
@@ -27,6 +27,39 @@ describe('relevance', () => {
   it('doorAssignment is dead with a single open door', () => {
     expect(at('doorAssignment', { doors: ['1L'] }).relevant).toBe(false)
     expect(at('doorAssignment', { doors: ['1L', '2L'] }).relevant).toBe(true)
+  })
+
+  // The toggle only exists because the contrast is instructive, so the wiring
+  // that decides when it is live has to be exact: two regions to cut, and a
+  // strategy that reads position along the cabin.
+  describe('doorAwareZones', () => {
+    const two = { doors: ['1L', '2L'], strategy: 'front_to_back' }
+
+    it('is live with two doors and a spatially ordered strategy', () => {
+      for (const strategy of SPATIAL_STRATEGIES) {
+        expect(at('doorAwareZones', { ...two, strategy }).relevant).toBe(true)
+      }
+    })
+
+    it('is dead with a single door, and says so', () => {
+      const dead = at('doorAwareZones', { ...two, doors: ['1L'] })
+      expect(dead.relevant).toBe(false)
+      expect(dead.reason).toMatch(/one door/i)
+    })
+
+    it('is dead when every passenger is sent to the same door anyway', () => {
+      const dead = at('doorAwareZones', { ...two, doorAssignment: 'single' })
+      expect(dead.relevant).toBe(false)
+      expect(dead.reason).toMatch(/same door/i)
+    })
+
+    it('is dead for strategies that never look at position along the cabin', () => {
+      for (const strategy of ['random', 'wilma', 'steffen_modified', 'priority_5tier', 'by_bags']) {
+        const dead = at('doorAwareZones', { ...two, strategy })
+        expect(dead.relevant).toBe(false)
+        expect(dead.reason).toMatch(/down the cabin/i)
+      }
+    })
   })
 
   it('non-compliance drift is dead when nobody is non-compliant', () => {
@@ -119,5 +152,41 @@ describe('control schema', () => {
         expect(control.explain.length).toBeGreaterThan(25)
       }
     }
+  })
+})
+
+/**
+ * The one relevance rule that is a claim about the ENGINE, checked against the
+ * engine rather than against a list.
+ *
+ * `SPATIAL_STRATEGIES` decides whether the per-door toggle is offered or
+ * disabled, so if a strategy ever starts (or stops) reading position along the
+ * cabin, the panel must not go on saying the toggle is dead. Passengers are
+ * handed to the door in queue order, so their `enterTime` vector is the
+ * boarding order made observable.
+ */
+describe('per-door zones: the disabled reason matches the real engine', () => {
+  it('toggling it moves exactly the strategies the panel says it moves', async () => {
+    const sim = await import('../../src/sim/index.js')
+    const { buildDefaultConfig } = await import('../../src/state/configDefaults.js')
+    const base = { ...buildDefaultConfig(sim), doors: ['1L', '2L'] }
+    const order = (config) => sim.runSimulation(config).perPassenger.map((p) => p.enterTime).join(',')
+
+    for (const strategy of Object.keys(sim.STRATEGIES)) {
+      const aware = order({ ...base, strategy, doorAwareZones: true })
+      const naive = order({ ...base, strategy, doorAwareZones: false })
+      expect
+        .soft(aware !== naive, `${strategy} should ${SPATIAL_STRATEGIES.has(strategy) ? '' : 'not '}move`)
+        .toBe(SPATIAL_STRATEGIES.has(strategy))
+    }
+  })
+
+  it('is a no-op with one door open, which is why the control goes dead there', async () => {
+    const sim = await import('../../src/sim/index.js')
+    const { buildDefaultConfig } = await import('../../src/state/configDefaults.js')
+    const base = { ...buildDefaultConfig(sim), doors: ['1L'], strategy: 'front_to_back' }
+    expect(sim.runSimulation({ ...base, doorAwareZones: true }).totalSeconds).toBe(
+      sim.runSimulation({ ...base, doorAwareZones: false }).totalSeconds,
+    )
   })
 })

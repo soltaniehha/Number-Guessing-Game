@@ -285,12 +285,12 @@ function drawDoors(ctx, geom, tokens) {
 function drawRowNumbers(ctx, geom, tokens) {
   const stride = geom.rowNumberStride
   if (!stride) return
-  const size = Math.max(8, Math.min(geom.minPitchPx * 0.62, 11))
+  const size = geom.rowLabelSize
   ctx.font = LABEL_FONT.replace('%s', size.toFixed(1))
   ctx.fillStyle = tokens['text-3']
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
-  const offset = geom.halfV + size * 1.15
+  const offset = geom.rowLabelV
   const cabinFirst = new Set()
   for (const cabin of geom.aircraft.cabins || []) {
     const first = geom.rows.find((row) => row.cabinId === cabin.id)
@@ -305,10 +305,12 @@ function drawRowNumbers(ctx, geom, tokens) {
       cabinFirst.has(row.rowNumber) ||
       row.rowNumber % stride === 0
     if (!keep) continue
-    // A door chevron and its queue lane occupy the label lane here, so step
-    // the number outside them rather than dropping a row number altogether.
+    // A door chevron hangs into the label lane here, so step the number past
+    // the chevron rather than dropping a row number altogether. Both gutters
+    // are INSIDE the queue lane: `queueLaneOffset` reserved them before the
+    // lane was placed, so a label never lands on the dots or the count pill.
     const door = doorNear(geom, row.u, 1)
-    const v = door ? Math.abs(door.laneV) + size * 1.3 : offset
+    const v = door ? geom.rowLabelDoorV : offset
     ctx.fillText(String(row.rowNumber), sx(geom, row.u, v), sy(geom, row.u, v))
   }
 }
@@ -402,6 +404,8 @@ export function makeScratch(paxCount, rowCount, laneCount, doorCount) {
     heat: new Int16Array(Math.max(1, rowCount * laneCount)),
     /** Passengers still queued, per door. */
     queueCount: new Int32Array(Math.max(1, doorCount)),
+    /** Offset of the last dot drawn in each queue, px along the lane. */
+    queueTail: new Float32Array(Math.max(1, doorCount)),
     queueBuf: new Float32Array(128),
     tally: new Int32Array(5),
   }
@@ -611,7 +615,7 @@ function buildDoorIndex(geom) {
 }
 
 function paintQueues(ctx, geom, tokens, frame, scratch) {
-  const r = Math.max(1.5, geom.dotRadius * 0.82)
+  const r = geom.queueDotRadius
   const waiting = tokens[stateToken(STATE.QUEUED)]
   const doors = geom.doors
 
@@ -628,6 +632,8 @@ function paintQueues(ctx, geom, tokens, frame, scratch) {
       out: scratch.queueBuf,
     })
     scratch.queueBuf = layout.offsets
+    const tail = layout.offsets[layout.shown - 1] || 0
+    if (scratch.queueTail) scratch.queueTail[d] = tail
 
     const laneV = door.laneV
     const dir = door.laneDir || 1
@@ -645,7 +651,7 @@ function paintQueues(ctx, geom, tokens, frame, scratch) {
     // Queue lane backing.
     ctx.beginPath()
     ctx.moveTo(door.u, laneV)
-    ctx.lineTo(door.u + dir * Math.max(layout.offsets[layout.shown - 1] || 0, r), laneV)
+    ctx.lineTo(door.u + dir * Math.max(tail, r), laneV)
     ctx.strokeStyle = withAlpha(tokens['surface-2'], 0.95)
     ctx.lineWidth = r * 2.9
     ctx.lineCap = 'round'
@@ -663,8 +669,25 @@ function paintQueues(ctx, geom, tokens, frame, scratch) {
   }
 }
 
+/** Keep the pill's whole box on the canvas, never half of it. */
+const BADGE_MARGIN = 2
+const clamp = (v, lo, hi) => (hi < lo ? (lo + hi) / 2 : Math.min(Math.max(v, lo), hi))
+
+/**
+ * The live count on each active queue (UI_SPEC 1.1).
+ *
+ * The pill wants to sit just ahead of the head of the queue, at the door. A
+ * FORWARD door has nothing ahead of it: `1L` resolves to u ≈ 0 on every
+ * airframe in the roster — negative, in fact, since the door is half a pitch
+ * forward of row 1 — so "one pill-width further forward" put the badge off the
+ * left-hand edge of the canvas and the busiest queue on the aeroplane rendered
+ * as eighty red dots with no number against them. When the head end has no
+ * room the pill goes to the TAIL of the queue instead, which is empty by
+ * construction, and whatever happens the box is finally clamped into the
+ * canvas so a count is always readable.
+ */
 function paintQueueBadges(ctx, geom, tokens, scratch) {
-  const size = Math.max(9, Math.min(geom.halfV * 0.22, 12))
+  const size = geom.queueBadgeSize
   ctx.font = BADGE_FONT.replace('%s', size.toFixed(1))
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
@@ -674,11 +697,17 @@ function paintQueueBadges(ctx, geom, tokens, scratch) {
     const count = scratch.queueCount[d]
     if (!count) continue
     const label = String(count)
-    const u = door.u - (door.laneDir || 1) * size * 1.9
-    const x = sx(geom, u, door.laneV)
-    const y = sy(geom, u, door.laneV)
     const w = ctx.measureText(label).width + size * 1.1
     const h = size * 1.6
+    const dir = door.laneDir || 1
+
+    let u = door.u - dir * size * 1.9
+    if (!badgeFits(geom, u, door.laneV, w, h)) {
+      const tail = scratch.queueTail ? scratch.queueTail[d] : door.laneLength
+      u = door.u + dir * ((tail || 0) + w / 2 + size * 0.5)
+    }
+    const x = clamp(sx(geom, u, door.laneV), w / 2 + BADGE_MARGIN, geom.width - w / 2 - BADGE_MARGIN)
+    const y = clamp(sy(geom, u, door.laneV), h / 2 + BADGE_MARGIN, geom.height - h / 2 - BADGE_MARGIN)
 
     roundRectPath(ctx, x - w / 2, y - h / 2, w, h, h / 2)
     ctx.fillStyle = tokens[stateToken(STATE.QUEUED)]
@@ -686,6 +715,18 @@ function paintQueueBadges(ctx, geom, tokens, scratch) {
     ctx.fillStyle = tokens['text-inv']
     ctx.fillText(label, x, y)
   }
+}
+
+/** Does a `w` x `h` pill centred on plan point (u, v) land wholly on canvas? */
+function badgeFits(geom, u, v, w, h) {
+  const x = sx(geom, u, v)
+  const y = sy(geom, u, v)
+  return (
+    x - w / 2 >= BADGE_MARGIN &&
+    x + w / 2 <= geom.width - BADGE_MARGIN &&
+    y - h / 2 >= BADGE_MARGIN &&
+    y + h / 2 <= geom.height - BADGE_MARGIN
+  )
 }
 
 // ---------------------------------------------------------------------------

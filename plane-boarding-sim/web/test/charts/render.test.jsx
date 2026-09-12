@@ -220,6 +220,66 @@ describe('ChartGrid', () => {
     expect(container.querySelectorAll('.ch-empty').length).toBe(12)
   })
 
+  /**
+   * Compare mode has to filter a ranking TABLE that lives beside the grid, not
+   * inside it, so the hidden set can be lifted out — while Analytics mode, and
+   * every other caller that passes neither prop, keeps the internal one.
+   * There is still exactly one legend either way: this lifts the state, it
+   * does not add a second control.
+   */
+  describe('the hidden set can be lifted to a parent', () => {
+    const legend = (c) => [...c.querySelectorAll('.cg-filterbar .ch-legend-item.is-button')]
+
+    it('defaults to its own state when neither prop is given', () => {
+      const { container } = render(<ChartGrid batch={full} />)
+      const buttons = legend(container)
+      click(buttons[0])
+      expect(buttons[0].getAttribute('aria-pressed')).toBe('false')
+    })
+
+    it('reports every change to the parent and renders what it is told', () => {
+      const seen = []
+      const handle = render(
+        <ChartGrid batch={full} hidden={new Set()} onHiddenChange={(next) => seen.push(next)} />,
+      )
+      const key = () => legend(handle.container)[1]
+      click(key())
+      // Controlled: the parent has not said yes yet, so nothing has changed.
+      expect(key().getAttribute('aria-pressed')).toBe('true')
+      expect(seen).toHaveLength(1)
+      expect([...seen[0]]).toHaveLength(1)
+
+      rerender(handle, <ChartGrid batch={full} hidden={seen[0]} onHiddenChange={() => {}} />)
+      expect(key().getAttribute('aria-pressed')).toBe('false')
+      // …and the charts followed the same set, not a second one.
+      const shown = [...handle.container.querySelectorAll('.cg-card .ch-legend-item')]
+      expect(shown.some((el) => el.textContent.includes(key().textContent))).toBe(false)
+    })
+
+    it('still has exactly one filter row when controlled', () => {
+      const { container } = render(
+        <ChartGrid batch={full} hidden={new Set(['wilma'])} onHiddenChange={() => {}} />,
+      )
+      expect(container.querySelectorAll('.cg-filterbar')).toHaveLength(1)
+      expect(container.querySelector('.cg-card .cg-filterbar')).toBeNull()
+    })
+
+    it('routes "Top 3 only" and "Show all" through the parent as well', () => {
+      const seen = []
+      const onHiddenChange = (next) => seen.push(next)
+      const handle = render(<ChartGrid batch={full} hidden={new Set()} onHiddenChange={onHiddenChange} />)
+      const button = (text) =>
+        [...handle.container.querySelectorAll('.cg-btn')].find((b) => b.textContent === text)
+      click(button('Top 3 only'))
+      expect([...seen[0]]).toHaveLength(3)
+      // "Show all" is disabled while nothing is hidden, so let the parent land
+      // the change first — the controlled path only moves when it says so.
+      rerender(handle, <ChartGrid batch={full} hidden={seen[0]} onHiddenChange={onHiddenChange} />)
+      click(button('Show all'))
+      expect([...seen[1]]).toHaveLength(0)
+    })
+  })
+
   it('grows from empty to partial to complete without remounting', () => {
     const handle = render(<ChartGrid batch={blank} />)
     rerender(handle, <ChartGrid batch={partial} running />)

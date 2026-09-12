@@ -10,7 +10,7 @@ import PlaybackControls from '../../src/cabin/PlaybackControls.jsx'
 import PassengerTooltip from '../../src/cabin/PassengerTooltip.jsx'
 import { usePlayback } from '../../src/cabin/usePlayback.js'
 import { STATE, replayDuration } from '../../src/cabin/playback.js'
-import { makeReplay } from '../../src/cabin/__fixtures__/makeReplay.js'
+import { makeReplay, makeSplitEconomyAircraft } from '../../src/cabin/__fixtures__/makeReplay.js'
 import { makeStubContext } from './stubContext.js'
 
 const THEME_CSS = readFileSync(resolve(process.cwd(), 'src/theme.css'), 'utf8')
@@ -296,6 +296,67 @@ describe('CabinLegend', () => {
     const view = mount(<CabinLegend replay={REPLAY} showClasses={false} showCounts={false} />)
     expect(view.host.textContent).not.toContain('Main Cabin')
     view.unmount()
+  })
+
+  /**
+   * The 787-9 carries economy in two physically separate sections — rows 30-35
+   * forward and 42-57 aft, split by a galley complex — and both declare
+   * `classKey: 'economy'`. Deduping on the class alone dropped the aft section,
+   * which is SIXTEEN rows and the largest cabin on the aeroplane, and left the
+   * survivor labelled "Economy (forward)": a key that tells the reader the rear
+   * half of the aircraft is something it is not.
+   */
+  it('lists both of the 787-9 economy sections', () => {
+    const replay = { aircraft: makeSplitEconomyAircraft() }
+    const view = mount(<CabinLegend replay={replay} showCounts={false} />)
+    const chips = [...view.host.querySelectorAll('.cab-legend__chip')].map(
+      (chip) => chip.parentElement.textContent.trim(),
+    )
+    expect(chips).toEqual([
+      'Polaris Business',
+      'Premium Plus',
+      'Economy (forward)',
+      'Economy (aft)',
+    ])
+    view.unmount()
+  })
+
+  it('still collapses two cabins that really are the same thing', () => {
+    const replay = {
+      aircraft: {
+        cabins: [
+          { id: 'eco_a', name: 'Main Cabin', classKey: 'economy' },
+          { id: 'eco_b', name: 'Main Cabin', classKey: 'economy' },
+          { id: 'first', name: 'First', classKey: 'first' },
+        ],
+      },
+    }
+    const view = mount(<CabinLegend replay={replay} showCounts={false} />)
+    expect(view.host.querySelectorAll('.cab-legend__chip').length).toBe(2)
+    view.unmount()
+  })
+
+  /**
+   * Every airframe in the roster, straight from the declarative source both
+   * ports read. Six aeroplanes, no chip listed twice, and the 787-9 keeping
+   * all four of its cabins.
+   */
+  it('lists every roster cabin exactly once, on all six airframes', () => {
+    const roster = JSON.parse(
+      readFileSync(resolve(process.cwd(), '../parity/aircraft.json'), 'utf8'),
+    )
+    expect(roster.aircraft.length).toBe(6)
+    for (const spec of roster.aircraft) {
+      const view = mount(
+        <CabinLegend replay={{ aircraft: { cabins: spec.cabins } }} showCounts={false} />,
+      )
+      const chips = [...view.host.querySelectorAll('.cab-legend__chip')].map(
+        (chip) => chip.parentElement.textContent.trim(),
+      )
+      expect(chips, spec.id).toEqual(spec.cabins.map((c) => c.name))
+      expect(new Set(chips).size, `${spec.id} lists a cabin twice`).toBe(chips.length)
+      view.unmount()
+    }
   })
 })
 

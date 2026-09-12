@@ -59,6 +59,7 @@ export const ENGINE_DEFAULTS = {
     "gateCheckPenalty": 22.0,
     "binCongestionWeight": 0.45,
     "zoneCount": 4,
+    "doorAwareZones": true,
     "keepPartiesTogether": true,
     "preboardFirst": true,
     "nonComplianceRate": 0.15,

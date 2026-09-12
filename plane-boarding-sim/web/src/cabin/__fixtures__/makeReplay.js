@@ -61,7 +61,12 @@ function buildAircraft(spec) {
   const rowSlots = []
   const seats = []
   const cabins = []
-  let x = NOSE_M
+  // `noseM` is where row 1 sits behind the nose datum. The real roster puts it
+  // at ZERO -- `parity/aircraft.json` measures x from row 1, so a forward door
+  // half a pitch ahead of it lands on a NEGATIVE x. Fixtures that always leave
+  // 6.2 m of nose in front never reproduce that, which is how the forward
+  // door's queue badge came to be painted off the canvas unnoticed.
+  let x = spec.noseM ?? NOSE_M
 
   for (const cabin of spec.cabins) {
     cabins.push({
@@ -245,9 +250,74 @@ export function makeTwinAisleAircraft() {
   })
 }
 
+/**
+ * 3-3-3 twin aisle laid out like the roster's 787-9: FOUR cabins, of which two
+ * are economy — a short forward section and a long aft one, physically split
+ * by a galley complex — and a forward door on the roster's own datum, i.e. at
+ * a negative x, half a pitch ahead of row 1.
+ *
+ * Both of those are things the other two fixtures cannot express, and both hid
+ * a real defect: the legend deduped economy down to one chip and dropped the
+ * biggest cabin on the aeroplane, and the forward door's queue count was drawn
+ * off the left-hand edge of the canvas.
+ */
+export function makeSplitEconomyAircraft() {
+  const aft = []
+  for (let r = 42; r <= 57; r++) aft.push(r)
+  return buildAircraft({
+    id: 'b787_9',
+    name: '787-9 (3-3-3, split economy)',
+    aisleCount: 2,
+    tailM: 11.5,
+    noseM: 0,
+    cabins: [
+      {
+        id: 'polaris',
+        name: 'Polaris Business',
+        classKey: 'business',
+        layout: ['A', '|', 'D', 'F', '|', 'L'],
+        rows: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        pitchIn: 78,
+      },
+      {
+        id: 'premium_plus',
+        name: 'Premium Plus',
+        classKey: 'premium',
+        layout: ['A', 'C', '|', 'D', 'E', 'F', '|', 'J', 'L'],
+        rows: [20, 21, 22],
+        pitchIn: 38,
+      },
+      {
+        id: 'economy_fwd',
+        name: 'Economy (forward)',
+        classKey: 'economy',
+        layout: ['A', 'B', 'C', '|', 'D', 'E', 'F', '|', 'J', 'K', 'L'],
+        rows: [30, 31, 32, 33, 34, 35],
+        pitchIn: 31,
+        exitRows: [30],
+      },
+      {
+        id: 'economy_aft',
+        name: 'Economy (aft)',
+        classKey: 'economy',
+        layout: ['A', 'B', 'C', '|', 'D', 'E', 'F', '|', 'J', 'K', 'L'],
+        rows: aft,
+        pitchIn: 31,
+        exitRows: [42],
+      },
+    ],
+    doors: [
+      { id: '1L', name: '1L', atRow: 1, aisleIndex: 0, kind: 'jetbridge', enabled: true },
+      { id: '2L', name: '2L', atRow: 20, aisleIndex: 1, kind: 'jetbridge', enabled: true },
+      { id: '4L', name: '4L', atRow: 42, aisleIndex: 1, kind: 'jetbridge', enabled: false },
+    ],
+  })
+}
+
 export const AIRCRAFT_BUILDERS = {
   single: makeSingleAisleAircraft,
   twin: makeTwinAisleAircraft,
+  split: makeSplitEconomyAircraft,
 }
 
 // ---------------------------------------------------------------------------
@@ -360,7 +430,7 @@ function zoneNumber(p) {
  * Build a deterministic replay.
  *
  * @param {object} [options]
- * @param {'single'|'twin'|object} [options.aircraft='single']
+ * @param {'single'|'twin'|'split'|object} [options.aircraft='single']
  * @param {number} [options.seed=20240101]
  * @param {number} [options.loadFactor=0.92]
  * @param {'random'|'back_to_front'|'wilma'} [options.strategy='back_to_front']

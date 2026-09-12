@@ -108,7 +108,10 @@ explanation of what it does physically.
    interval, and the squeeze-past speed factor (0 = strict aisle blocking)
 5. **Overhead bins** — bags per row-side, search radius, search penalty,
    gate-check penalty, congestion weight
-6. **Behaviour** — zone count, keep parties together, preboard first,
+6. **Behaviour** — zone count, whether zones are measured per door
+   (`doorAwareZones`; dead with one door open, or when every passenger is
+   sent to the same door, or under a strategy that does not order by
+   position along the cabin), keep parties together, preboard first,
    non-compliance rate + jitter, late-arrival rate, open-seating policy
 7. **Presets** — one-click realistic scenarios (see below), Reset to defaults,
    Copy/paste config as JSON, share-by-URL

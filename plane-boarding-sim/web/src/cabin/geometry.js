@@ -24,14 +24,72 @@ export const WALL_M = 0.26
 export const MAX_LATERAL_EXAGGERATION = 2.4
 /** Wing half-span as a multiple of the fuselage half-width. */
 export const WING_SPAN_FACTOR = 0.42
-/** Lateral offset of the jet-bridge queue lane, as a multiple of half-width. */
+/**
+ * Lateral offset of the jet-bridge queue lane, as a multiple of half-width.
+ *
+ * A FLOOR, not the answer: `queueLaneOffset` below pushes the lane further out
+ * when the row-number gutter would otherwise be underneath it.
+ */
 export const QUEUE_LANE_FACTOR = 1.18
 /** A queue lane never runs further aft than this fraction of the aeroplane. */
 export const QUEUE_LANE_MAX_FRACTION = 0.46
+/** Clear air between the outermost row label and the queue lane, px. */
+export const QUEUE_LABEL_GAP = 2
 
 /** Below these pixel sizes labels are dropped rather than crushed. */
 export const MIN_PX_FOR_LETTERS = 8.5
 export const MIN_PX_FOR_ROW_NUMBERS = 11
+
+// ---------------------------------------------------------------------------
+// Sizes shared with the painter
+// ---------------------------------------------------------------------------
+//
+// `draw.js` paints the row numbers, the door chevrons, the queue dots and the
+// count pill; this module decides where the queue lane goes. Those two have to
+// agree to the pixel or the lane lands on the labels, so the sizes live here
+// and the painter reads them off the geometry rather than recomputing them.
+
+/** Font size of a row number, px. */
+export const rowLabelSizePx = (minPitchPx) => Math.max(8, Math.min(minPitchPx * 0.62, 11))
+/** Half-height of a door chevron, px — it hangs into the label gutter. */
+export const doorGlyphSizePx = (halfV) => Math.max(5, Math.min(halfV * 0.3, 13))
+/** Font size of the jet-bridge queue count pill, px. */
+export const queueBadgeSizePx = (halfV) => Math.max(9, Math.min(halfV * 0.22, 12))
+/** Radius of one dot in a jet-bridge queue, px. */
+export const queueDotRadiusPx = (dotRadius) => Math.max(1.5, dotRadius * 0.82)
+
+/**
+ * Where the queue lane sits laterally, in plan px, measured from the
+ * centreline.
+ *
+ * Row numbers run down the starboard flank, stepping outboard where a door
+ * chevron is in the way. On a widebody the plain `QUEUE_LANE_FACTOR` lane then
+ * lands on top of them: 787-9 rows 20-21 and 777-300ER rows 14-15 sat
+ * underneath door 2L's queue dots and its count pill. So the label gutter is
+ * reserved FIRST and the lane starts outboard of it — unless the viewport is
+ * too shallow to give it the room, in which case nothing is gained by moving
+ * the queue and the old offset stands.
+ */
+export function queueLaneOffset({ halfV, minPitchPx, dotRadius, acrossHalf }) {
+  const floor = halfV * QUEUE_LANE_FACTOR
+  const label = rowLabelSizePx(minPitchPx)
+  const outermostLabel =
+    Math.max(rowLabelV(halfV, label), rowLabelDoorV(halfV, label)) + label * 0.6
+  const half = queueHalfExtent(halfV, dotRadius)
+  const wanted = outermostLabel + half + QUEUE_LABEL_GAP
+  const room = Math.max(floor, (acrossHalf || 0) - half)
+  return Math.max(floor, Math.min(wanted, room))
+}
+
+/** Lateral centre of a row number in the plain gutter, plan px. */
+export const rowLabelV = (halfV, labelSize) => halfV + labelSize * 1.15
+/** Lateral centre of a row number stepped clear of a door chevron, plan px. */
+export const rowLabelDoorV = (halfV, labelSize) =>
+  halfV + doorGlyphSizePx(halfV) * 0.92 + labelSize * 0.95
+
+/** Half the lateral thickness of a queue lane: dots, backing and count pill. */
+export const queueHalfExtent = (halfV, dotRadius) =>
+  Math.max(queueBadgeSizePx(halfV) * 0.8, queueDotRadiusPx(dotRadius) * 1.45)
 
 const DEFAULT_PITCH_M = 0.79
 
@@ -263,6 +321,8 @@ export function computeGeometry(aircraft, opts) {
   for (const cabin of aircraft.cabins || []) cabinBysId.set(cabin.id, cabin)
 
   const seatHeight = SEAT_UNIT_M * 0.86 * scaleLat
+  /** Radius of a passenger dot, px. Sized here because the queue lane needs it. */
+  const dotRadius = Math.max(1.6, Math.min(seatHeight * 0.34, 7))
   for (let i = 0; i < count; i++) {
     const seat = seatList[i]
     const lateral = model.lateralByCabin.get(seat.cabinId)
@@ -284,6 +344,13 @@ export function computeGeometry(aircraft, opts) {
     laneV[k] = model.aisleUnits[k] * SEAT_UNIT_M * scaleLat
   }
 
+  // --- labels and the queue lane ----------------------------------------
+  // The row-number gutter is reserved before the queue is placed, so the two
+  // never share pixels. See `queueLaneOffset`.
+  const rowLabelSize = rowLabelSizePx(minPitchPx)
+  const acrossHalf = (orientation === 'vertical' ? width : height) / 2 - padding
+  const queueLaneV = queueLaneOffset({ halfV, minPitchPx, dotRadius, acrossHalf })
+
   // --- doors ------------------------------------------------------------
   const enabledIds = opts.enabledDoorIds
     ? new Set(opts.enabledDoorIds)
@@ -303,8 +370,8 @@ export function computeGeometry(aircraft, opts) {
       u: door.x * scaleLon,
       v: side * halfV,
       side,
-      /** Where the jet-bridge queue lane starts, just outside the skin. */
-      laneV: side * halfV * QUEUE_LANE_FACTOR,
+      /** Where the jet-bridge queue lane sits, outboard of the label gutter. */
+      laneV: side * queueLaneV,
       laneLength: 0,
       /** +1 = the queue trails aft of the door, -1 = forward of it. */
       laneDir: 1,
@@ -356,7 +423,22 @@ export function computeGeometry(aircraft, opts) {
     /** Draw every Nth row number when the pitch gets tight. */
     rowNumberStride: minPitchPx >= 18 ? 1 : minPitchPx >= 11 ? 5 : 0,
     /** Radius of a passenger dot, px. */
-    dotRadius: Math.max(1.6, Math.min(seatHeight * 0.34, 7)),
+    dotRadius,
+    // --- the label / queue contract, shared with draw.js -----------------
+    /** Row-number font size, px. */
+    rowLabelSize,
+    /** Lateral centre of a row number away from a door, plan px. */
+    rowLabelV: rowLabelV(halfV, rowLabelSize),
+    /** Lateral centre of a row number stepped past a door chevron, plan px. */
+    rowLabelDoorV: rowLabelDoorV(halfV, rowLabelSize),
+    /** Lateral offset of every queue lane, plan px. */
+    queueLaneV,
+    /** Half the lateral thickness of a queue lane, plan px. */
+    queueHalfExtent: queueHalfExtent(halfV, dotRadius),
+    /** Count-pill font size, px. */
+    queueBadgeSize: queueBadgeSizePx(halfV),
+    /** Radius of one queued dot, px. */
+    queueDotRadius: queueDotRadiusPx(dotRadius),
   }
 }
 

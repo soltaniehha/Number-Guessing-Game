@@ -8,7 +8,7 @@ help:
 	@echo "  make test-py     pytest only"
 	@echo "  make test-js     vitest only"
 	@echo "  make parity      Fast gate: RNG vectors + 15 fixture digests (seconds)"
-	@echo "  make parity-full 384 scenarios, COMPLETE results, exact (~4 min)"
+	@echo "  make parity-full 384 scenarios, COMPLETE results, exact (under a minute)"
 	@echo "  make lint        ESLint the web app"
 	@echo "  make dev         Start the web app on http://localhost:5173"
 	@echo "  make build       Production build of the web app"
@@ -36,8 +36,8 @@ parity:
 # divergence in seconds, which is why it is the gate, but it can pass while
 # individual per-passenger records differ. This is the check that actually
 # proved the port -- 16 strategies x 6 aircraft x 4 configurations, complete
-# RunResults compared field by field with no tolerance. Takes about four
-# minutes; run it before a release and after any change to the engine.
+# RunResults compared field by field with no tolerance. Takes wall-clock tens of
+# seconds; run it before a release and after any change to the engine.
 parity-full:
 	python3 parity/compare.py --full
 

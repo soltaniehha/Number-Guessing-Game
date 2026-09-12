@@ -35,7 +35,7 @@ export default function CabinLegend({
   showClasses = true,
   className = '',
 }) {
-  const cabins = replay && showClasses ? dedupeClasses(replay.aircraft.cabins) : []
+  const cabins = replay && showClasses ? dedupeCabins(replay.aircraft.cabins) : []
 
   return (
     <div className={`cab-legend ${className}`.trim()}>
@@ -63,7 +63,7 @@ export default function CabinLegend({
         <div className="cab-legend__group">
           <span className="cab-legend__label">Cabin</span>
           {cabins.map((cabin) => (
-            <span className="cab-legend__item" key={cabin.classKey}>
+            <span className="cab-legend__item" key={cabin.id ?? cabinIdentity(cabin)}>
               <i
                 className="cab-legend__chip"
                 style={{ background: `var(--${classToken(cabin.classKey)})` }}
@@ -114,12 +114,32 @@ function StateGlyph({ glyph, state }) {
   )
 }
 
-function dedupeClasses(cabins) {
+/**
+ * A cabin's identity for the key: its class AND its name.
+ *
+ * NOT the class alone. A 787-9 carries economy in two physically separate
+ * sections split by a galley complex -- rows 30-35 forward and 42-57 aft --
+ * and both declare `classKey: 'economy'`. Keying on the class dropped the aft
+ * section, which is the largest cabin on the aeroplane, and left the survivor
+ * labelled "Economy (forward)" -- a key that actively tells the reader the
+ * rear half of the aircraft is something else.
+ */
+const cabinIdentity = (cabin) => `${cabin.classKey}\u0000${cabin.name ?? ''}`
+
+/**
+ * Collapse cabins that are the same thing said twice.
+ *
+ * Same class and same label is one entry -- that is what this is for, and an
+ * airframe that declares a class in several chunks under one name still gets
+ * a single chip. Two distinct sections, with their own names, both appear.
+ */
+function dedupeCabins(cabins) {
   const seen = new Set()
   const out = []
   for (const cabin of cabins || []) {
-    if (seen.has(cabin.classKey)) continue
-    seen.add(cabin.classKey)
+    const key = cabinIdentity(cabin)
+    if (seen.has(key)) continue
+    seen.add(key)
     out.push(cabin)
   }
   return out

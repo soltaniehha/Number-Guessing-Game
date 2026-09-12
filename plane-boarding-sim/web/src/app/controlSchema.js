@@ -665,6 +665,14 @@ export const CONTROLS = [
     explain: 'How many row bands the gate calls. More zones means finer control and more announcements.',
   },
   {
+    key: 'doorAwareZones',
+    kind: 'toggle',
+    section: 'behaviour',
+    label: 'Zones measured per door',
+    explain:
+      'Each open door works its own half of the cabin, far end first. Off, one cabin-wide order runs the length of the aeroplane — which is rear-first at the forward door and front-first at the rear one.',
+  },
+  {
     key: 'keepPartiesTogether',
     kind: 'toggle',
     section: 'behaviour',

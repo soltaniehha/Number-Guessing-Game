@@ -120,29 +120,63 @@ const CHART_DEFS = [
  * them at once — no per-chart filters. Colour is assigned per strategy, not
  * per row of the current selection, so hiding a strategy never repaints the
  * survivors.
+ *
+ * ## Who owns the filter
+ *
+ * By default the grid owns it: Analytics mode drops `<ChartGrid batch/>` in
+ * and the legend simply works. Pass `hidden` (a Set of strategy keys) and
+ * `onHiddenChange` and the owner moves out to the parent instead — Compare
+ * mode does that so the ranking table, which is a SIBLING of the grid rather
+ * than one of its charts, filters with the charts instead of contradicting
+ * them. It is still ONE legend: the controlled form lifts the state, it does
+ * not add a second filter UI.
  */
-export function ChartGrid({ batch, running = false, className = '' }) {
-  const [hidden, setHidden] = useState(() => new Set())
+export function ChartGrid({
+  batch,
+  running = false,
+  hidden: hiddenProp,
+  onHiddenChange,
+  className = '',
+}) {
+  const [ownHidden, setOwnHidden] = useState(() => new Set())
   const [maximised, setMaximised] = useState(null)
+
+  // Uncontrolled unless the parent actually supplies a set; an `undefined`
+  // prop is "you keep it", which is what every existing call site means.
+  const controlled = hiddenProp != null
+  const hidden = useMemo(
+    () => (controlled ? (hiddenProp instanceof Set ? hiddenProp : new Set(hiddenProp)) : ownHidden),
+    [controlled, hiddenProp, ownHidden],
+  )
 
   const { all, overflowCount } = useSeries(batch, hidden)
 
-  const toggle = useCallback((key) => {
-    setHidden((prev) => {
-      const next = new Set(prev)
+  /** One place where a new hidden set is published, controlled or not. */
+  const applyHidden = useCallback(
+    (next) => {
+      if (!controlled) setOwnHidden(next)
+      if (onHiddenChange) onHiddenChange(next)
+    },
+    [controlled, onHiddenChange],
+  )
+
+  const toggle = useCallback(
+    (key) => {
+      const next = new Set(hidden)
       if (next.has(key)) next.delete(key)
       else next.add(key)
-      return next
-    })
-  }, [])
+      applyHidden(next)
+    },
+    [applyHidden, hidden],
+  )
 
-  const showAll = useCallback(() => setHidden(new Set()), [])
+  const showAll = useCallback(() => applyHidden(new Set()), [applyHidden])
   const showOnlyFastest = useCallback(() => {
     const ranked = [...all].sort(
       (a, b) => (a.entry?.totalSeconds?.mean ?? Infinity) - (b.entry?.totalSeconds?.mean ?? Infinity),
     )
-    setHidden(new Set(ranked.slice(3).map((s) => s.key)))
-  }, [all])
+    applyHidden(new Set(ranked.slice(3).map((s) => s.key)))
+  }, [all, applyHidden])
 
   const runs = totalRuns(batch)
   const requested = batch?.meta?.runsRequested

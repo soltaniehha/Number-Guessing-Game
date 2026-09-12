@@ -33,6 +33,25 @@ export const TIER_STRATEGIES = new Set([
   'open_seating',
 ])
 
+/**
+ * Strategies that order passengers by where they sit ALONG the cabin, and so
+ * are the only ones the per-door regions can change (ENGINE_SPEC section 4.1
+ * lists exactly these). `wilma` and `steffen_modified` are absent on purpose:
+ * they order by seat depth and row parity, which say nothing about how far
+ * down the aisle a passenger is walking.
+ */
+export const SPATIAL_STRATEGIES = new Set([
+  'back_to_front',
+  'front_to_back',
+  'wilma_zoned',
+  'rotating_zone',
+  'block_boarding',
+  'reverse_pyramid',
+  'steffen_perfect',
+  'common_sense_5tier',
+  'southwest_2026',
+])
+
 const RELEVANT = { relevant: true }
 const no = (reason) => ({ relevant: false, reason })
 
@@ -79,6 +98,18 @@ export function relevanceOf(key, config, aircraft) {
       return doorCount > 1
         ? RELEVANT
         : no('Everyone uses the only open door.')
+
+    // Per-door regions only exist when there is more than one region to cut
+    // the cabin into, and only a strategy that orders by position along the
+    // cabin can notice where the boundary falls.
+    case 'doorAwareZones':
+      if (doorCount < 2) return no('With one door open there is only one region, so the order is cabin-wide either way.')
+      if (config.doorAssignment === 'single') {
+        return no('Everyone walks to the same door under this door rule, so there is only one region.')
+      }
+      return SPATIAL_STRATEGIES.has(strategy)
+        ? RELEVANT
+        : no('This strategy does not order passengers by how far down the cabin they sit.')
 
     case 'complianceJitter':
       return config.nonComplianceRate > 0
