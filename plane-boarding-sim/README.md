@@ -225,34 +225,81 @@ cabin-wide order every published zone scheme actually describes:
 ```
 $ cd python && python3 -m plane_boarding.cli compare --aircraft a320neo \
       --doors 1L 2L --runs 40 --set doorAwareZones=false
+======================================================================================================================
+ Airbus A320neo  —  40 replications per strategy, 171 passengers, doors 1L,2L
+ ranked fastest first by the PAIRED comparison against free-for-all
+======================================================================================================================
+   #  strategy                mean  +/-95%    p95  vs rnd  paired vs random (95% CI) far-1st  relative time
+----------------------------------------------------------------------------------------------------------------------
+  =1  steffen_modified       10:16    16.7  11:54   0.905  -1:04 [-1:19,-0:49]         -0.03  ██████████████░░░░
+  =1  steffen_perfect        10:19    22.7  12:21   0.910  -1:01 [-1:19,-0:44]         -0.03  ██████████████░░░░
+  =1  wilma                  10:22    18.8  11:43   0.914  -0:58 [-1:15,-0:42]         -0.02  ██████████████░░░░
+   4  slowest_first          10:33    18.7  12:04   0.931  -0:47 [-1:04,-0:30]         -0.03  ██████████████░░░░
+  =5  wilma_zoned            11:07    23.1  13:10   0.980  -0:14 [-0:34,+0:06]  ns     -0.06  ███████████████░░░
+  =5  priority_5tier         11:15    21.0  12:57   0.992  -0:06 [-0:21,+0:10]  ns     -0.03  ███████████████░░░
+  =5  reverse_pyramid        11:16    23.6  13:06   0.993  -0:05 [-0:23,+0:13]  ns     -0.06  ███████████████░░░
+  =5  random                 11:21    17.8  12:44   1.000  (baseline)                  -0.02  ███████████████░░░
+   9  by_bags                11:29    20.6  13:18   1.012  +0:08 [-0:04,+0:21]  ns     -0.03  ███████████████░░░
+  10  southwest_2026         11:59    25.1  14:02   1.056  +0:38 [+0:17,+1:00]         -0.01  ████████████████░░
+ =11  common_sense_5tier     12:20    26.1  14:29   1.088  +1:00 [+0:39,+1:20]         -0.04  ████████████████░░
+ =11  front_to_back          12:45    23.9  14:51   1.124  +1:24 [+1:03,+1:45]         -0.19  █████████████████░
+ =13  back_to_front          13:24    27.2  16:15   1.182  +2:04 [+1:44,+2:24]         -0.18  ██████████████████
+ =13  block_boarding         13:24    27.2  16:15   1.182  +2:04 [+1:44,+2:24]         -0.18  ██████████████████
+ =13  open_seating           13:30    30.5  16:33   1.190  +2:10 [+1:36,+2:43]         +0.06  ██████████████████
+ =13  rotating_zone          13:30    27.2  16:47   1.191  +2:10 [+1:51,+2:28]         -0.19  ██████████████████
+----------------------------------------------------------------------------------------------------------------------
+   [ same legend as above ]
+ best: 3 strategies tie for first (steffen_modified, steffen_perfect, wilma)  —  about 1:04 faster than free-for-all (9.5%)
+ seat interference (mean events/run):  steffen_modified=22   steffen_perfect=21   wilma=20   slowest_first=34
+ door sequencing: 'rotating_zone' scores -0.19 -- it loads the rows NEAREST a door first, which is the front-to-back pathology in miniature.
+   -> With two doors a single cabin-wide zone order cannot be right for both: calling the rear zone first is far-end-first at 1L and near-end-first at 2L. Zone order has to be set per door.
+======================================================================================================================
 ```
 
-| strategy | cabin-wide | per-door | |
-|---|---|---|---|
-| `steffen_perfect` | 0.910 | **0.831** | the waves now sweep outward from each door |
-| `wilma_zoned` | 0.980 | **0.942** | the flow result the finding above rests on |
-| `common_sense_5tier` | 1.088 | **1.027** | |
-| `reverse_pyramid` | 0.993 | **0.977** | |
-| `southwest_2026` | 1.056 | 1.053 | barely moves: the ladder, not the geometry, is binding |
-| `back_to_front` | 1.182 | 1.188 | |
-| `rotating_zone` | 1.191 | **1.168** | |
-| `front_to_back` | **1.124** | 1.497 | |
+`far-1st` is the `doorSequencing` metric in the tables above, reported for the
+*worst* door: positive means that door's queue starts at the far end of its
+region, negative means it starts next to the door, which is the pathology.
 
-`front_to_back` getting dramatically worse is the mechanism working, not
-failing. The cabin-wide version was accidentally half-right: front-first is the
+| strategy | ratio, cabin-wide | ratio, per-door | far-1st, cabin-wide | far-1st, per-door |
+|---|---|---|---|---|
+| `steffen_perfect` | 0.910 | **0.831** | −0.03 | −0.01 |
+| `wilma_zoned` | 0.980 | **0.942** | −0.06 | **+0.06** |
+| `reverse_pyramid` | 0.993 | **0.977** | −0.06 | **+0.07** |
+| `common_sense_5tier` | 1.088 | **1.027** | −0.04 | **+0.08** |
+| `southwest_2026` | 1.056 | 1.053 | −0.01 | **+0.07** |
+| `rotating_zone` | 1.191 | **1.168** | −0.19 | **+0.06** |
+| `back_to_front` | 1.182 | 1.188 | −0.18 | **+0.16** |
+| `block_boarding` | 1.182 | 1.188 | −0.18 | **+0.16** |
+| `front_to_back` | **1.124** | 1.497 | −0.19 | −0.20 |
+
+Every one of those sequencing scores crosses from negative to positive except
+two. The control's is supposed to stay negative. `steffen_perfect`'s is a
+measurement artefact: its waves each sweep far-to-near independently, so the
+far-end-first property holds *per wave* rather than across the queue
+(ENGINE_SPEC §4.1) and the queue-level metric cannot see it — the 0.910 → 0.831
+in the time column is where it shows up instead. `front_to_back` getting
+dramatically worse is therefore the mechanism working, not failing: the
+cabin-wide version was accidentally half-right, because front-first is the
 pathology at the forward door but the *correct* far-end-first order at the aft
 one, so half the aeroplane was being boarded sensibly by mistake. Measure
-position from each passenger's own door and the control strategy is allowed to
-be as bad as it is supposed to be. It is also the clearest thing to look at
-first in the app: it is one switch in the Behaviour section, live whenever two
-doors are open and the strategy orders by position along the cabin, and dead
-with a stated reason when it cannot do anything.
+position from each passenger's own door and the control is finally allowed to be
+as bad as it is supposed to be.
 
-Note what does **not** move. `southwest_2026` shifts by 0.003 and
-`priority_5tier` not at all — the latter never asks where anyone sits, so there
-is no region for it to be measured in. That is the finding above restated as a
-null result: door-awareness is a spatial fix, and the thing cancelling the flow
-benefit is not spatial.
+A few of those rows are worth not glossing over. `back_to_front` and
+`block_boarding` have their ordering repaired — the score goes from −0.18 to
++0.16 — and the clock does not notice, 1.182 against 1.188. Removing the
+near-door-first pathology at the aft door is not, on its own, worth measurable
+time for a scheme that was already concentrating everyone into one band of aisle
+at once. And `southwest_2026` moves by 0.003, `priority_5tier` not at all: the
+latter never asks where anyone sits, so there is no region for it to be measured
+in. That pair is the finding at the top of this file restated as a null result —
+door-awareness is a spatial fix, and the thing cancelling the flow benefit is not
+spatial.
+
+In the app this is one switch, *Zones measured per door*, in the Behaviour
+section: live whenever two doors are open and the strategy orders by position
+along the cabin, and `aria-disabled` with the reason in place of its help line
+when it cannot do anything.
 
 ---
 
