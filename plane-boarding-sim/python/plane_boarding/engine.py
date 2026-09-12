@@ -761,7 +761,7 @@ def run(
                         #
                         # Bounded this way the passer can only ever be inside the
                         # zone of the stower it owns, which is the invariant
-                        # `test_a_passer_inside_a_stowers_zone_owns_the_lock`
+                        # `test_a_walker_inside_a_stowers_zone_holds_that_stowers_lock`
                         # asserts.
                         k = j + d
                         if 0 <= k < n_occ:
