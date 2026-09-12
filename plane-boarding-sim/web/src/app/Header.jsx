@@ -6,12 +6,29 @@ const MODES = [
   { id: 'compare', label: 'Compare', key: '3' },
 ]
 
-export function Header() {
+/** The id of the tab that controls the viewport, shared with AppShell. */
+export const tabId = (mode) => `viewtab-${mode}`
+export const TABPANEL_ID = 'app-tabpanel'
+
+export function Header({ inert }) {
   const { mode, setMode, run, busy, batch, theme, toggleTheme, setDrawerOpen, setModal, isMockEngine } = useStore()
   const running = busy || batch.running
 
+  /** A tablist is one tab stop; arrow keys move between the tabs inside it. */
+  const onTabKeyDown = (ev) => {
+    const step =
+      ev.key === 'ArrowRight' || ev.key === 'ArrowDown' ? 1 : ev.key === 'ArrowLeft' || ev.key === 'ArrowUp' ? -1 : 0
+    const jump = ev.key === 'Home' ? 0 : ev.key === 'End' ? MODES.length - 1 : null
+    if (!step && jump == null) return
+    ev.preventDefault()
+    const at = Math.max(0, MODES.findIndex((m) => m.id === mode))
+    const next = jump != null ? MODES[jump] : MODES[(at + step + MODES.length) % MODES.length]
+    setMode(next.id)
+    ev.currentTarget.querySelector(`[data-mode="${next.id}"]`)?.focus()
+  }
+
   return (
-    <header className="header">
+    <header className="header" inert={inert}>
       <div className="header__brand">
         <button
           type="button"
@@ -24,23 +41,28 @@ export function Header() {
           </svg>
         </button>
         <PlaneMark />
-        <h1 className="header__title">
-          Boarding&nbsp;Lab
-          {isMockEngine && (
-            <span className="tag" title="The real engine is not wired in yet; results come from the fixture engine.">
-              mock engine
-            </span>
-          )}
-        </h1>
+        {/* The tag is a sibling, not a child: inside the <h1> the page's only
+            heading announced as "Boarding Lab MOCK ENGINE". */}
+        <h1 className="header__title">Boarding&nbsp;Lab</h1>
+        {isMockEngine && (
+          <span className="tag" title="The real engine is not wired in yet; results come from the fixture engine.">
+            mock engine
+          </span>
+        )}
       </div>
 
-      <nav className="tabs" aria-label="View mode">
+      <div className="tabs" role="tablist" aria-label="View mode" onKeyDown={onTabKeyDown}>
         {MODES.map((m) => (
           <button
             key={m.id}
+            id={tabId(m.id)}
             type="button"
+            role="tab"
+            data-mode={m.id}
+            aria-selected={mode === m.id}
+            aria-controls={TABPANEL_ID}
+            tabIndex={mode === m.id ? 0 : -1}
             className={`tab${mode === m.id ? ' is-active' : ''}`}
-            aria-current={mode === m.id ? 'page' : undefined}
             onClick={() => setMode(m.id)}
             title={`${m.label} (${m.key})`}
           >
@@ -48,7 +70,7 @@ export function Header() {
             <span className="tab__key num" aria-hidden="true">{m.key}</span>
           </button>
         ))}
-      </nav>
+      </div>
 
       <div className="header__actions">
         <button
@@ -72,7 +94,15 @@ export function Header() {
         >
           {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
         </button>
-        <button type="button" className="btn btn--run" onClick={run} disabled={running}>
+        {/* aria-disabled, not disabled: this is the app's primary action, and a
+            control that removes itself from the tab order while you are
+            standing on it drops focus to <body>. */}
+        <button
+          type="button"
+          className="btn btn--run"
+          onClick={running ? undefined : run}
+          aria-disabled={running || undefined}
+        >
           <span className="btn__glyph" aria-hidden="true">{running ? <Spinner /> : <PlayIcon />}</span>
           {running ? 'Running…' : 'Run'}
         </button>

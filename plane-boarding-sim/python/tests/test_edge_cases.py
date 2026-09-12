@@ -175,3 +175,25 @@ def test_two_streams_never_walk_into_each_other():
                     overlap = min(a[1], b[1]) - max(a[0], b[0])
                     assert overlap <= 1e-9, (
                         f"lane {lane}: two doors' traffic overlaps by {overlap:.2f} m")
+
+
+@pytest.mark.parametrize("aid", ["e175", "a320neo", "b737_max8", "a220_300",
+                                 "b777_300er", "b787_9"])
+def test_no_strategy_door_combination_hits_the_time_limit(aid):
+    """The deadlock sweep. Partial aisle blocking changed the interaction rules
+    exactly where two deadlocks already lived (two-door open seating; a gate
+    release landing inside a squeeze zone), so every strategy is run against
+    every boardable door configuration on every aircraft."""
+    from itertools import combinations
+    from plane_boarding.aircraft import get_aircraft as g
+    from plane_boarding.strategies import STRATEGIES
+    ac = g(aid)
+    boardable = [d.id for d in ac.boardable_doors()]
+    combos = [list(c) for r in range(1, len(boardable) + 1)
+              for c in combinations(boardable, r)]
+    for strategy in STRATEGIES:
+        for doors in combos:
+            r = simulate(cfg_for(aid, strategy, seed=2, doors=doors))
+            assert r.completed, f"{aid}/{strategy}/{doors} hit MAX_SIM_SECONDS"
+            assert r.totalSeconds < 3600, (
+                f"{aid}/{strategy}/{doors} took {r.totalSeconds:.0f}s")

@@ -7,11 +7,13 @@ import { snap } from '../../lib/format.js'
  * deliberately modelling a retrofit.
  */
 export function NullableSlider({
-  id, label, explain, value, autoValue, autoLabel = 'Auto', min, max, step, format, disabled, reason, onChange,
+  id, label, explain, value, autoValue, autoLabel = 'Auto', min, max, step, format, announce, disabled, reason, onChange,
 }) {
   const isAuto = value == null
   const effective = isAuto ? autoValue : value
   const shown = typeof format === 'function' ? format(effective) : String(effective)
+  const said = typeof announce === 'function' ? announce(effective) : shown
+  const spoken = isAuto ? `${said}, taken from the airframe` : said
 
   return (
     <Field
@@ -32,17 +34,23 @@ export function NullableSlider({
             max={max}
             step={step}
             value={effective ?? min}
-            disabled={disabled || isAuto}
+            aria-disabled={disabled || isAuto || undefined}
             aria-describedby={describedBy}
-            aria-valuetext={shown}
-            onChange={(e) => onChange(snap(Number(e.target.value), step))}
+            aria-valuetext={spoken}
+            onChange={(e) => {
+              if (disabled || isAuto) return
+              onChange(snap(Number(e.target.value), step))
+            }}
           />
           <label className="checkbox">
             <input
               type="checkbox"
               checked={isAuto}
-              disabled={disabled}
-              onChange={(e) => onChange(e.target.checked ? null : autoValue)}
+              aria-disabled={disabled || undefined}
+              onChange={(e) => {
+                if (disabled) return
+                onChange(e.target.checked ? null : autoValue)
+              }}
             />
             <span>{autoLabel}</span>
           </label>

@@ -1,6 +1,9 @@
 /** Transport controls for Cabin mode: play, step, reset, scrub, speed. */
 import { SPEEDS, useClock, usePlayback, useStore } from '../state/StoreProvider.jsx'
 import { fmtClock, fmtSpeed } from '../lib/format.js'
+import { radioGroupKeyDown, rovingTabIndex } from './controls/radioGroup.js'
+
+const SPEED_OPTIONS = SPEEDS.map((value) => ({ value }))
 
 export function PlaybackBar() {
   const playback = usePlayback()
@@ -63,12 +66,19 @@ export function PlaybackBar() {
 
       <span className="transport__clock transport__clock--dim num">{fmtClock(playback.duration)}</span>
 
-      <div className="speeds" role="radiogroup" aria-label="Playback speed">
+      <div
+        className="speeds"
+        role="radiogroup"
+        aria-label="Playback speed"
+        onKeyDown={(ev) => radioGroupKeyDown(ev, SPEED_OPTIONS, playback.speed, playback.setSpeed)}
+      >
         {SPEEDS.map((s) => (
           <button
             key={s}
             type="button"
             role="radio"
+            data-value={s}
+            tabIndex={rovingTabIndex(SPEED_OPTIONS, playback.speed, s)}
             aria-checked={playback.speed === s}
             className={`speeds__item num${playback.speed === s ? ' is-active' : ''}`}
             onClick={() => playback.setSpeed(s)}

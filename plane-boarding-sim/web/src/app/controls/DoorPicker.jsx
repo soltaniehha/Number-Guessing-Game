@@ -8,6 +8,8 @@ import { Field } from './Field.jsx'
 export function DoorPicker({ id, label, explain, aircraft, enabled, onToggle }) {
   const doors = aircraft?.doors || []
   const onCount = doors.filter((d) => enabled.includes(d.id)).length
+  const lockId = `${id}-lock`
+  const locked = onCount === 1
 
   return (
     <Field id={id} label={label} value={`${onCount}/${doors.length}`} explain={explain} labelFor={false}>
@@ -22,12 +24,19 @@ export function DoorPicker({ id, label, explain, aircraft, enabled, onToggle }) 
                 className={`door${on ? ' is-on' : ''}${isLastOpen ? ' is-locked' : ''}`}
                 title={isLastOpen ? 'At least one door must stay open.' : door.name}
               >
+                {/* aria-disabled, not disabled: `disabled` is what made the
+                    "at least one door must stay open" explanation impossible
+                    to reach with a keyboard. */}
                 <input
                   type="checkbox"
                   className="door__input"
                   checked={on}
-                  disabled={isLastOpen}
-                  onChange={() => onToggle(door.id)}
+                  aria-disabled={isLastOpen || undefined}
+                  aria-describedby={isLastOpen ? lockId : undefined}
+                  onChange={() => {
+                    if (isLastOpen) return
+                    onToggle(door.id)
+                  }}
                 />
                 <span className="door__id num">{door.id}</span>
                 <span className="door__meta">
@@ -37,6 +46,11 @@ export function DoorPicker({ id, label, explain, aircraft, enabled, onToggle }) 
               </label>
             )
           })}
+          {locked && (
+            <p className="field__help" id={lockId}>
+              At least one door must stay open.
+            </p>
+          )}
         </div>
       )}
     </Field>

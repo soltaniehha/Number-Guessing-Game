@@ -3,7 +3,12 @@
    Every colour used anywhere in the app comes from here. */
 
 :root {
-  color-scheme: light dark;
+  /* The palette below IS the light theme, so the UA-rendered furniture
+     (scrollbars, form controls, the canvas behind the page) must be told the
+     same thing. `light dark` would let a dark-preferring browser paint dark
+     scrollbars on a light page. The [data-theme] rules below flip it, so the
+     correction lives here beside the tokens rather than in App.css. */
+  color-scheme: light;
 
   /* surfaces */
   --bg:            #f4f6f9;
@@ -13,10 +18,14 @@
   --border:        #d3dae5;
   --border-strong: #b6c0d0;
 
-  /* text */
+  /* text
+     --text-3 is the one-line explanation / axis-tick ink. It lands on
+     --surface, --surface-2, --surface-3 and the tinted open-door row, and it
+     is never large text, so it is chosen to clear WCAG AA 4.5:1 on ALL of
+     them (measured 5.74 / 5.07 / 4.66 / 4.68). Do not lighten it. */
   --text:          #10151f;
   --text-2:        #4a5568;
-  --text-3:        #7a869a;
+  --text-3:        #59677d;
   --text-inv:      #ffffff;
 
   /* brand / accent */
@@ -78,7 +87,11 @@
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
+:root[data-theme='light'] { color-scheme: light; }
+
 :root[data-theme='dark'] {
+  color-scheme: dark;
+
   --bg:            #0b0f16;
   --surface:       #131924;
   --surface-2:     #1a2231;
@@ -88,7 +101,8 @@
 
   --text:          #e8edf5;
   --text-2:        #9fb0c7;
-  --text-3:        #6b7d95;
+  /* AA on the dark surfaces: 6.22 / 5.63 / 4.88, door row 4.84. */
+  --text-3:        #8a9bb2;
   --text-inv:      #0b0f16;
 
   --accent:        #60a5fa;

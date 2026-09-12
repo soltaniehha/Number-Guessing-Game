@@ -490,7 +490,7 @@ They are collected here so they are not mistaken for sourced numbers:
   numeric source exists for the walk-back/gate-check penalty. Both the per-row capacity constant
   and the search-and-stow penalty are my extrapolation.
 
-### 12.3 Partial aisle blocking while stowing (`stowPassSpeedFactor`) — implemented, default off
+### 12.3 Partial aisle blocking while stowing (`stowPassSpeedFactor` = 0.40)
 
 **What Schultz does.** In an ASEP/cellular model a passenger occupies a cell or
 they do not. There is no way to express "the aisle narrows"; a stowing passenger
@@ -526,30 +526,41 @@ B777 over 20. Every row satisfies the ordering assertion except 0.60.
 Literature bands for reference: f2b 1.30–1.50, b2f 1.20–1.35, wilma 0.85–0.92,
 reverse pyramid 0.82–0.90, Steffen 0.70–0.80 (§5c).
 
-**Decision: default 0, mechanism kept and exposed.** No value in the physically
-plausible 0.2-0.6 range satisfies both the absolute band and the strategy
-ratios. Strict blocking scores **3 of 5** ratio bands and reproduces the
-published ordering and both twin-aisle findings; the best partial-blocking
-setting scores **1 of 5**, at 0.20 loses the B777 reverse-pyramid result, at
-0.30 holds the ordering by 0.001 (a coin flip), and at 0.60 loses it outright.
+**Decision: ship 0.40.** The two candidate models are both imperfect on ratio
+magnitudes -- strict misses back-to-front (1.10 vs 1.20-1.35) and WilMA (0.94 vs
+0.85-0.92); 0.40 misses those plus reverse pyramid and Steffen. But only one of
+them is also 50% wrong about the headline number, and §11.2 of this document is
+explicit that **magnitudes are not the gate**: the experimental and simulation
+columns in §5c disagree far too widely (Steffen at 0.76 experimentally against
+0.55-0.75 in simulation) for any single band to be a pass/fail criterion. The
+ordering is the assertion that matters, and it holds cleanly at 0.40.
 
-The compression is arithmetic rather than a bug. Partial blocking shortens the
-queue behind a stower, so avoiding a stow-block is worth less -- and avoiding
-stow-blocks is most of what outside-in and Steffen buy you. Steffen's advantage
-falls from 22% to 16%, below Schultz's own realistic 20-25% figure for optimised
-strategies.
+Understating one strategy's margin by six points is a much smaller error to put
+in front of a user than being half an hour wrong about a twenty-minute process.
+0.40 rather than 0.30 because 0.30 passes the ordering by 0.001, which is a coin
+flip, and a default should not sit on a knife edge.
 
-The product's comparative claims ("outside-in saves you 7%") rest on the ratios;
-its absolute claims ("your flight boarded in N minutes") carry a documented and
-measurable level offset a reader can correct for. Shipping the ratios is the
-honest trade. Anyone who wants the absolute number instead can set
-`stowPassSpeedFactor` to 0.30-0.40 and accept the compression -- the mechanism
-is implemented, tested and deadlock-free, and this table says what it costs.
+**What we accepted.** Partial blocking compresses strategy advantages toward
+parity. A shorter queue behind a stower makes avoiding a stow-block worth less,
+and avoiding stow-blocks is most of what outside-in and Steffen buy you. Our
+Steffen advantage therefore reads **16%** against Schultz's realistic **20-25%**,
+and reverse pyramid and WilMA both sit a few points above their published bands.
+The rank order, the twin-aisle reverse-pyramid result and the multi-aisle Steffen
+collapse all survive.
 
-**Still open.** The remaining ~50% single-door offset is unexplained by any
-mechanism we have tested (density law 3%, same-row serialisation 0.2%, slow
-passengers 2%, bin congestion 6%, door arrival process 0% once corrected to run
-in parallel). Either the strict single-file exclusion process is too pessimistic
+**If you care more about ratio magnitudes than absolute times, set
+`stowPassSpeedFactor` to 0.** That is one config key, it is a labelled option in
+the control schema, and the table above is the evidence for what it changes:
+Steffen returns to 0.78 and reverse pyramid to 0.90, at the cost of every
+absolute time being ~50% high on single-door boarding. The sweep is reproducible
+-- re-run it rather than re-deriving the argument.
+
+**Still open.** Under strict blocking the ~50% single-door offset was
+unexplained by any other mechanism tested (density law 3%, same-row
+serialisation 0.2%, slow passengers 2%, bin congestion 6%, door arrival process
+0% once corrected to run in parallel), which is what pointed at partial blocking
+in the first place. It remains possible that the strict process is too
+pessimistic
 in some way we have not identified, or `T = 4.5N + 138` — a linear fit across a
 29–190 pax range, `[S]` single-source, and not reproducible from Schultz's own
 3.7 s arrivals plus ~26 s of per-passenger aisle service — is optimistic at the

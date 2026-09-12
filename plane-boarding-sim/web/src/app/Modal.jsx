@@ -1,41 +1,18 @@
-import { useEffect, useRef } from 'react'
+import { useRef } from 'react'
+import { useDialogFocus } from './focusTrap.js'
 
-/** A small focus-trapping dialog. Escape closes, focus returns to the opener. */
+/**
+ * A small focus-trapping dialog. Escape closes, focus returns to the opener.
+ *
+ * All of the focus behaviour lives in `useDialogFocus`; see the note there
+ * about why the mount effect and the key listener must be separate. Callers
+ * should still hand this a `useCallback`-stable `onClose` — the split effect
+ * makes an unstable one harmless rather than catastrophic, and belt and braces
+ * is the right amount of clothing for a keyboard trap.
+ */
 export function Modal({ title, onClose, children, footer }) {
   const ref = useRef(null)
-  const opener = useRef(null)
-
-  useEffect(() => {
-    opener.current = document.activeElement
-    const node = ref.current
-    node?.querySelector('[data-autofocus], button, textarea, input')?.focus()
-
-    function onKey(ev) {
-      if (ev.key === 'Escape') {
-        ev.stopPropagation()
-        onClose()
-        return
-      }
-      if (ev.key !== 'Tab' || !node) return
-      const focusable = node.querySelectorAll('button, textarea, input, select, a[href], [tabindex]:not([tabindex="-1"])')
-      if (focusable.length === 0) return
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-      if (ev.shiftKey && document.activeElement === first) {
-        ev.preventDefault()
-        last.focus()
-      } else if (!ev.shiftKey && document.activeElement === last) {
-        ev.preventDefault()
-        first.focus()
-      }
-    }
-
-    document.addEventListener('keydown', onKey, true)
-    return () => {
-      document.removeEventListener('keydown', onKey, true)
-      if (opener.current instanceof HTMLElement) opener.current.focus()
-    }
-  }, [onClose])
+  useDialogFocus({ containerRef: ref, onClose })
 
   return (
     <div className="modal__scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>

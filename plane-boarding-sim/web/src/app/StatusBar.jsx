@@ -8,9 +8,13 @@ import { fmtClock, fmtInt, fmtSpeed } from '../lib/format.js'
 import { sampleAt } from '../lib/curves.js'
 import { readSummaries } from '../state/aggregate.js'
 
-export function StatusBar() {
+export function StatusBar({ inert }) {
   const { mode } = useStore()
-  return <div className="statusbar">{mode === 'cabin' ? <CabinStatus /> : <BatchStatus />}</div>
+  return (
+    <div className="statusbar" inert={inert}>
+      {mode === 'cabin' ? <CabinStatus /> : <BatchStatus />}
+    </div>
+  )
 }
 
 function CabinStatus() {

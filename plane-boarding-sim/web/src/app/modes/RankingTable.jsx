@@ -15,7 +15,7 @@ export function RankingTable({ batch, strategies }) {
   const span = Math.max(1, worst.mean + worst.ci95)
 
   return (
-    <div className="tablewrap">
+    <div className="tablewrap" tabIndex={0} role="region" aria-label="Strategy ranking, scrollable">
       <table className="rank">
         <caption className="rank__caption">
           Mean boarding time over {best.n} replications per strategy, with 95% confidence intervals.

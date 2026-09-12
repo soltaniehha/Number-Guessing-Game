@@ -130,22 +130,42 @@ describe('app shell', () => {
     expect(window.location.hash).toBe('')
   })
 
-  it('keeps the last door open in the UI', async () => {
+  it('keeps the last open door locked, but reachable and explained', async () => {
     const { host } = await mount()
     const doors = [...host.querySelectorAll('.door__input')]
     expect(doors.length).toBeGreaterThan(1)
     const checked = doors.filter((d) => d.checked)
     expect(checked).toHaveLength(1)
-    expect(checked[0].disabled).toBe(true)
+    const last = checked[0]
+    // aria-disabled, not disabled: the "at least one door must stay open"
+    // explanation has to be reachable with a keyboard.
+    expect(last.getAttribute('aria-disabled')).toBe('true')
+    expect(last.disabled).toBe(false)
+    last.focus()
+    expect(document.activeElement).toBe(last)
+    const reason = host.querySelector(`#${last.getAttribute('aria-describedby')}`)
+    expect(reason?.textContent).toMatch(/at least one door/i)
+    // ...and it still refuses to close.
+    await act(async () => {
+      last.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    })
+    expect([...host.querySelectorAll('.door__input')].filter((d) => d.checked)).toHaveLength(1)
   })
 
-  it('disables an irrelevant control and says why', async () => {
+  it('marks an irrelevant control aria-disabled and keeps its reason reachable', async () => {
     const { host } = await mount()
     // Default strategy is not a zone strategy, so zoneCount must be dead.
     const behaviour = [...host.querySelectorAll('.section__toggle')].find((t) => /behaviour/i.test(t.textContent))
     if (behaviour.getAttribute('aria-expanded') === 'false') await click(behaviour)
     const zone = host.querySelector('#ctl-zoneCount')
-    expect(zone.disabled).toBe(true)
+    expect(zone.getAttribute('aria-disabled')).toBe('true')
+    // `disabled` would take it out of the tab order, and with it the only
+    // place the reason is written down.
+    expect(zone.disabled).toBe(false)
+    zone.focus()
+    expect(document.activeElement).toBe(zone)
+    const reason = host.querySelector(`#${zone.getAttribute('aria-describedby')}`)
+    expect(reason?.textContent).toMatch(/zone/i)
     expect(zone.closest('.field').getAttribute('title')).toMatch(/zone/i)
   })
 

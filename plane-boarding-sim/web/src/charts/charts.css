@@ -294,11 +294,27 @@
   font-size: 11.5px;
   color: var(--text-3);
 }
+
+/* The milestone live region: announced, never seen. */
+.cg-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
 .cg-status strong { color: var(--text-2); font-weight: 600; }
 
 .cg-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  /* min() so a container narrower than the track floor still fits: a bare
+     minmax(360px, 1fr) makes the track 360px wide no matter how little room
+     there is, and the grid overflows. */
+  grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr));
   gap: 14px;
   min-width: 0;
 }
@@ -341,11 +357,10 @@
   .cg-filterbar { position: static; }
 }
 
-/* In-fill labels pick ink or paper by the fill's luminance (dataviz: the one
-   place text may sit on a data colour). Light theme: paper on the saturated
-   fills, ink on amber. Dark theme: every series step is bright, so ink wins
-   everywhere — and --text-inv is already the dark ink there. */
-.ch-seg-label { fill: var(--text-inv); font-size: 11px; font-weight: 600; }
-.ch-seg-label.is-stow { fill: var(--text); }
-:root[data-theme='dark'] .ch-seg-label,
-:root[data-theme='dark'] .ch-seg-label.is-stow { fill: var(--text-inv); }
+/* In-fill labels sit on a data colour (dataviz: the one place that is
+   allowed), so the ink is chosen PER SEGMENT from the measured luminance of
+   the fill it lands on — see `labelInk()` in primitives/ink.js — not from the
+   theme. Choosing by theme put white on light-theme blue (3.68:1) and on
+   light-theme red (4.37:1), both under AA. The `fill` therefore arrives
+   inline; only the type is set here. */
+.ch-seg-label { font-size: 11px; font-weight: 600; }

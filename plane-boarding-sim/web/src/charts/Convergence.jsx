@@ -13,6 +13,14 @@ import { useSeries, legendItems } from './selectors.js'
 const BAND_LIMIT = 4
 
 /**
+ * `left` has to clear BOTH the m:ss tick labels — which end 8px off the plot
+ * and run about 34px wide — and the rotated axis title sitting outboard of
+ * them. At 56 the title box overlapped the "33:20" and "41:40" ticks by 2px,
+ * measured; 64 leaves ~5px of air.
+ */
+const MARGIN = { top: 12, right: 18, bottom: 46, left: 64 }
+
+/**
  * Chart 10 — Convergence.
  *
  * Running mean with a shrinking 95% band against replication count: the
@@ -91,7 +99,7 @@ export function Convergence({ batch, hidden, height = 300 }) {
       subtitle={empty ? 'waiting for replications' : `running mean ± 95% · up to ${model.maxN} replications`}
       ariaLabel={ariaLabel}
       height={height}
-      margin={{ top: 12, right: 18, bottom: 46, left: 56 }}
+      margin={MARGIN}
       empty={empty}
       emptyTitle={blank.title}
       emptyHint={blank.hint}
@@ -125,7 +133,7 @@ export function Convergence({ batch, hidden, height = 300 }) {
               label="Replications completed"
             />
             <text
-              transform={`translate(${-42},${innerHeight / 2}) rotate(-90)`}
+              transform={`translate(${-(margin.left - 12)},${innerHeight / 2}) rotate(-90)`}
               textAnchor="middle"
               style={{ fill: 'var(--text-2)', fontSize: 11, fontWeight: 500 }}
             >

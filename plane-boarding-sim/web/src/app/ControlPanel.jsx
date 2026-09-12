@@ -198,6 +198,7 @@ function Control({ control, store }) {
           max={control.max}
           step={control.step}
           format={control.format}
+          announce={control.announce}
           disabled={disabled}
           reason={reason}
           onChange={commit}
@@ -216,6 +217,7 @@ function Control({ control, store }) {
           max={control.max}
           step={control.step}
           format={control.format}
+          announce={control.announce}
           disabled={disabled}
           reason={reason}
           onChange={commit}

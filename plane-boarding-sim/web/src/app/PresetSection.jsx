@@ -2,6 +2,7 @@
  * Presets and config sharing: seven one-click scenarios, reset, copy/paste as
  * JSON, and a shareable URL that carries only the non-default values.
  */
+import { useRef } from 'react'
 import { useStore } from '../state/StoreProvider.jsx'
 import { PRESETS } from './presets.js'
 import { configDiff } from '../state/configReducer.js'
@@ -10,6 +11,7 @@ import { shareUrl } from '../lib/urlConfig.js'
 
 export function PresetSection() {
   const { config, defaults, applyPreset, reset, setToast, setModal } = useStore()
+  const afterReset = useRef(null)
   const diff = configDiff(config, defaults)
   const changed = Object.keys(diff).length
 
@@ -23,9 +25,27 @@ export function PresetSection() {
     setToast(ok ? { kind: 'ok', text: 'Shareable link copied' } : { kind: 'bad', text: 'Clipboard unavailable' })
   }
 
-  const openPaste = async () => {
-    const text = await readText()
-    setModal({ kind: 'paste', initial: typeof text === 'string' ? text : '' })
+  /**
+   * The dialog opens first, always. Reading the clipboard is a best-effort
+   * prefill that happens afterwards: with the default `prompt` permission
+   * state the read never settles, and awaiting it made the button look dead.
+   */
+  const openPaste = () => {
+    setModal({ kind: 'paste', initial: '' })
+    readText().then((text) => {
+      if (typeof text !== 'string' || !text.trim()) return
+      setModal((current) => (current?.kind === 'paste' ? { ...current, initial: text } : current))
+    })
+  }
+
+  /**
+   * Reset disables itself the moment it succeeds, and a control that disables
+   * itself under the user's finger drops focus to <body>. Hand focus on to the
+   * next control in the row before that happens.
+   */
+  const resetAndMoveFocus = () => {
+    afterReset.current?.focus()
+    reset()
   }
 
   return (
@@ -41,7 +61,7 @@ export function PresetSection() {
 
       <div className="share">
         <div className="share__row">
-          <button type="button" className="btn" onClick={reset} disabled={changed === 0}>
+          <button type="button" className="btn" onClick={resetAndMoveFocus} disabled={changed === 0}>
             Reset to defaults
           </button>
           <span className="share__count num">
@@ -49,7 +69,7 @@ export function PresetSection() {
           </span>
         </div>
         <div className="share__row">
-          <button type="button" className="btn" onClick={copyJson}>
+          <button type="button" className="btn" ref={afterReset} onClick={copyJson}>
             Copy JSON
           </button>
           <button type="button" className="btn" onClick={openPaste}>

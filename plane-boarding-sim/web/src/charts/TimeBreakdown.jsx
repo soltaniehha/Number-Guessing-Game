@@ -7,6 +7,8 @@ import { bandScale, cappedBand, bandInset, linearScale } from './primitives/scal
 import { roundedRightRect } from './primitives/shapes.js'
 import { formatPercentValue, formatDurationLong, formatNumber } from './primitives/format.js'
 import { ACTIVITY_SERIES } from './primitives/palette.js'
+import { labelInk, resolveColor } from './primitives/ink.js'
+import { useThemeVersion } from './primitives/useTheme.js'
 import { useSeries, byMeanAsc, runsLabel, paxCount } from './selectors.js'
 
 const BAR_CAP = 24
@@ -22,8 +24,23 @@ const SEGMENT_GAP = 2 // dataviz: surface does the separating, never a stroke
 export function TimeBreakdown({ batch, hidden, height = null }) {
   const { all, visible } = useSeries(batch, hidden)
   const { tip, show, hide } = useTooltip()
+  const themeVersion = useThemeVersion()
   // All series hidden is a different problem from no data — say which.
   const blank = all.length > 0 && visible.length === 0 ? emptyCopy('noStrategies') : emptyCopy('noRuns')
+
+  /**
+   * Value labels sit on the segment fill, so the ink is picked from that
+   * fill's measured luminance — per segment, not per theme. Resolved through
+   * the computed style so a theme flip re-measures the real painted colour.
+   */
+  const segmentInk = useMemo(() => {
+    void themeVersion
+    const map = {}
+    for (const activity of ACTIVITY_SERIES) {
+      map[activity.key] = labelInk(resolveColor(activity.color))
+    }
+    return map
+  }, [themeVersion])
 
   const rows = useMemo(() => {
     const withData = visible.filter((s) => s.entry?.meanBreakdown)
@@ -145,7 +162,8 @@ export function TimeBreakdown({ batch, hidden, height = null }) {
                             x={x0 + w / 2}
                             y={centre + 4}
                             textAnchor="middle"
-                            className={`num ch-seg-label${seg.key === 'stow' ? ' is-stow' : ''}`}
+                            className="num ch-seg-label"
+                            style={{ fill: segmentInk[seg.key] }}
                           >
                             {labelText}
                           </text>

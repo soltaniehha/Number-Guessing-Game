@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './charts.css'
 
 import { BoardingTimeByStrategy } from './BoardingTimeByStrategy.jsx'
@@ -148,15 +148,42 @@ export function ChartGrid({ batch, running = false, className = '' }) {
   const requested = batch?.meta?.runsRequested
   const complete = batch?.meta?.complete
 
+  /**
+   * The precise, continuously-updating figure. It is ordinary on-screen text,
+   * NOT a live region: during a batch it changes several times a second, and
+   * a polite queue fed at that rate never drains. Anyone can read it on
+   * demand; the milestones below are what gets announced.
+   */
   const status = useMemo(() => {
     if (all.length === 0) return 'No batch loaded yet.'
     const perStrategy = requested ? ` of ${formatNumber(requested)} each` : ''
-    if (running) return `Streaming — ${formatNumber(runs)} replications in${perStrategy}.`
+    if (running) return `Streaming — ${formatNumber(runs)} replications${perStrategy}.`
     if (complete) return `Complete — ${formatNumber(runs)} replications across ${all.length} strategies.`
     return `Paused — ${formatNumber(runs)} replications so far${perStrategy}.`
   }, [all.length, complete, requested, running, runs])
 
   const visibleCount = all.length - hidden.size
+
+  const notices = useMemo(() => {
+    const out = []
+    if (visibleCount === 0 && all.length > 0) out.push('Every strategy is hidden.')
+    if (overflowCount > 0) {
+      out.push(
+        `${formatNumber(overflowCount)} strategies past the ${MAX_SERIES}-colour limit share a muted key — hide ` +
+          'some to give them their own colour.',
+      )
+    }
+    return out
+  }, [all.length, overflowCount, visibleCount])
+
+  const announcement = useMilestoneStatus({
+    strategies: all.length,
+    runs,
+    requested,
+    running,
+    complete,
+    notices,
+  })
 
   return (
     <div className={`cg-root ${className}`.trim()}>
@@ -182,16 +209,14 @@ export function ChartGrid({ batch, running = false, className = '' }) {
             Top 3 only
           </button>
         </div>
-        <p className="cg-status" role="status" aria-live="polite" style={{ flexBasis: '100%', margin: 0 }}>
+        <p className="cg-status" style={{ flexBasis: '100%', margin: 0 }}>
           {status}
-          {visibleCount === 0 && all.length > 0 && <strong> Every strategy is hidden.</strong>}
-          {overflowCount > 0 && (
-            <strong>
-              {' '}
-              {formatNumber(overflowCount)} strategies past the {MAX_SERIES}-colour limit share a muted key — hide
-              some to give them their own colour.
-            </strong>
-          )}
+          {notices.map((notice) => (
+            <strong key={notice}> {notice}</strong>
+          ))}
+        </p>
+        <p className="cg-sr" role="status" aria-live="polite">
+          {announcement}
         </p>
       </div>
 
@@ -221,6 +246,55 @@ export function ChartGrid({ batch, running = false, className = '' }) {
       </div>
     </div>
   )
+}
+
+/**
+ * Batch progress as MILESTONES, not as a running total.
+ *
+ * A streaming batch updates the run counter several times a second. Pushed
+ * into a polite live region that is roughly four announcements a second — the
+ * queue never drains and the screen-reader user hears nothing else for the
+ * rest of the session (measured: 39 mutations in 10.5 s). So the live region
+ * only ever carries: the start, each quarter of the way through, the finish,
+ * a stop — and the filter notices, which only change on a click.
+ *
+ * Returns the text to put in the live region, '' before anything has happened.
+ */
+function useMilestoneStatus({ strategies, runs, requested, running, complete, notices }) {
+  const [announcement, setAnnouncement] = useState('')
+  const lastKey = useRef(null)
+
+  const expected = requested && strategies ? requested * strategies : 0
+  const quarter = expected > 0 ? Math.min(3, Math.max(0, Math.floor((runs / expected) * 4))) : 0
+  const noticeText = notices.join(' ')
+
+  const phase = complete ? 'complete' : running ? 'running' : strategies > 0 ? 'paused' : 'idle'
+  const key = `${phase}:${phase === 'running' ? quarter : ''}:${noticeText}`
+
+  useEffect(() => {
+    if (lastKey.current === key) return
+    lastKey.current = key
+    const total = expected ? ` of ${formatNumber(expected)}` : ''
+    let line = ''
+    if (phase === 'running' && quarter === 0) {
+      line = expected
+        ? `Run started — streaming ${formatNumber(expected)} replications across ${formatNumber(strategies)} ` +
+          `${strategies === 1 ? 'strategy' : 'strategies'}.`
+        : `Run started — streaming replications across ${formatNumber(strategies)} strategies.`
+    } else if (phase === 'running') {
+      const words = ['', 'A quarter of the way', 'Halfway', 'Three quarters of the way']
+      line = `${words[quarter]} — ${formatNumber(runs)}${total} replications.`
+    } else if (phase === 'complete') {
+      line =
+        `Run complete — ${formatNumber(runs)} replications across ${formatNumber(strategies)} ` +
+        `${strategies === 1 ? 'strategy' : 'strategies'}.`
+    } else if (phase === 'paused') {
+      line = `Run stopped — ${formatNumber(runs)}${total} replications completed.`
+    }
+    setAnnouncement([line, noticeText].filter(Boolean).join(' '))
+  }, [expected, key, noticeText, phase, quarter, runs, strategies])
+
+  return announcement
 }
 
 export default ChartGrid

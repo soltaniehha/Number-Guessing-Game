@@ -1,3 +1,4 @@
+import { useCallback } from 'react'
 import { Modal } from './Modal.jsx'
 import { useStore } from '../state/StoreProvider.jsx'
 
@@ -12,8 +13,10 @@ const SHORTCUTS = [
 
 export function HelpDialog() {
   const { setModal } = useStore()
+  // Stable: see the note in app/focusTrap.js.
+  const close = useCallback(() => setModal(null), [setModal])
   return (
-    <Modal title="Keyboard shortcuts" onClose={() => setModal(null)}>
+    <Modal title="Keyboard shortcuts" onClose={close}>
       <dl className="shortcuts">
         {SHORTCUTS.map(([keys, what]) => (
           <div className="shortcuts__row" key={keys}>

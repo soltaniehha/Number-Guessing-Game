@@ -9,7 +9,6 @@ import { EmptyState, ChartGlyph } from './EmptyState.jsx'
 import { BatchToolbar } from './BatchToolbar.jsx'
 import { ErrorBoundary } from '../ErrorBoundary.jsx'
 import { RankingTable } from './RankingTable.jsx'
-import { collectRuns } from './AnalyticsMode.jsx'
 
 export function CompareMode() {
   const { batch, config, strategies, setField, run } = useStore()
@@ -62,7 +61,7 @@ export function CompareMode() {
         {batch.result && hasChartGrid && (
           <ErrorBoundary label="The comparison charts">
             <Suspense fallback={<div className="viewport__loading">Loading charts…</div>}>
-              <ChartGrid batch={batch.result} runs={collectRuns(batch.result)} live={batch.running} running={batch.running} />
+              <ChartGrid batch={batch.result} running={batch.running} />
             </Suspense>
           </ErrorBoundary>
         )}

@@ -22,6 +22,7 @@ the validation set. Provenance for every number is in
 | Flat blocker-count shuffle `{1: 9 s, 2: 15 s}` | **Elementary-movement counts** `{none 1, aisle 4, middle 5, both 9}` × `Triangular(1.8, 2.4, 3.0)` (§6d) | The penalty depends on *which* seat blocks, not just how many; and every passenger pays one movement simply to sit |
 | Lognormal gate-scan, applied in series | **`exponential(3.7 s)` door arrival, cumulative clock in parallel with aisle blocking** (§5) | It is an arrival process, not a service time. Serialising it roughly doubled modelled boarding time |
 | `binBagsPerRowSide` a global default | **Per-airframe**, config-overridable (§6.4) | Bin volume is a property of the aeroplane; 1 bag/row-side on a legacy E175 against 4 on an A320neo |
+| A stowing passenger closed the aisle outright | **Partial blocking**: they step into the seat-row gap and one follower at a time edges past at `stowPassSpeedFactor` (§6.3), while a SHUFFLING passenger still blocks completely | The strict version overshoots the field regression by ~50% on single-door boarding; the asymmetry also makes seat interference correctly more expensive than bag stowing |
 | — | `monuments`, `Door.boardable`, `Aircraft.defaultConfig` (§2) | Real galley banks cost cabin length that a skipped row number does not; service doors and overwing hatches are exits, not boarding doors |
 
 ---
@@ -505,22 +506,28 @@ routinely edge past someone loading a bin.
   mechanism: it makes seat interference strictly more expensive than bag
   stowing, which is the effect outside-in methods exist to exploit.
 
-When it is **0** (the shipped default) a STOWING passenger is a hard obstruction
-and the model reduces exactly to the strict-blocking process described above.
+When it is **0** a STOWING passenger is a hard obstruction and the model
+reduces exactly to the strict-blocking process described above. That setting is
+Schultz's own cellular behaviour and is kept as a first-class option, labelled
+*strict aisle blocking (Schultz-comparable)*; the `schultz_reference` parity
+fixture pins it explicitly so it cannot drift when the default moves.
 
-**Why the default is 0.** Turning the mechanism on brings absolute single-door
-boarding time onto Schultz's field regression, which the strict model overshoots
-by ~50%. But it also compresses every strategy ratio toward 1.0 -- Steffen moves
-from 0.77 to 0.85, outside the published band -- and at 0.30 it inverts the
-WilMA/reverse-pyramid ordering and loses the twin-aisle result that reverse
-pyramid is best on a B777. Since the product's comparative claims rest on those
-ratios and its absolute claims carry a documented offset, the ratios win. The
-full experiment is recorded in docs/RESEARCH_PARAMETERS.md 12.3.
+**Shipped default: 0.40.** Calibrated so that single-door boarding lands on
+Schultz's field regression. The strict model overshoots it by ~50%, and the
+regression describes single-door jetbridge operations, which are the most common
+boarding in the world and the thing the product's headline number reports. The
+cost is that strategy advantages compress toward parity -- Steffen reads a 16%
+saving where Schultz's realistic figure is 20-25% -- because a shorter queue
+behind a stower makes avoiding a stow-block worth less, and that is most of what
+outside-in and Steffen buy you. Ordering is unaffected and both twin-aisle
+findings survive. Full sweep and reasoning: docs/RESEARCH_PARAMETERS.md 12.3.
 
-**(e) Bookkeeping** — record per-tick aisle occupancy, seated count, and each
-passenger's state for the visualization event log.
-
-Termination: all passengers SEATED, or `MAX_SIM_SECONDS` reached.
+**On the handover.** The squeeze lock passes to the next follower when the
+outgoing passer's next obstruction changes, not when they are fully clear. So
+two people can briefly be within a body depth of one stower -- but on opposite
+sides of them, still a body depth apart from each other, one finishing and one
+starting. Holding the lock until fully clear is the obvious alternative and it
+deadlocks: a passer that cannot advance would pin the stower indefinitely.
 
 ### 6.4 Overhead bin model
 

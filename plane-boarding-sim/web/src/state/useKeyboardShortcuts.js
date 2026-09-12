@@ -34,11 +34,15 @@ export function isTypingTarget(el) {
 export function isOwnedByTarget(el, key) {
   if (!el) return false
   const tag = el.tagName
+  const role = el.getAttribute?.('role')
   if (tag === 'INPUT' && el.type === 'range' && RANGE_KEYS.has(key)) return true
+  // Arrow keys inside a radiogroup or tablist move its selection; they are not
+  // the transport's to steal.
+  if (RANGE_KEYS.has(key) && (role === 'radio' || role === 'tab')) return true
   if (!ACTIVATION_KEYS.has(key)) return false
   if (tag === 'BUTTON' || tag === 'A') return true
   if (tag === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) return true
-  return el.getAttribute?.('role') === 'switch' || el.getAttribute?.('role') === 'radio'
+  return role === 'switch' || role === 'radio' || role === 'tab'
 }
 
 export function useKeyboardShortcuts() {

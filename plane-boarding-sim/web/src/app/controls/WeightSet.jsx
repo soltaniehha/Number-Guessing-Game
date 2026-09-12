@@ -53,9 +53,13 @@ export function WeightSet({ id, label, explain, value, keys, keyLabels, colors, 
                   max={1}
                   step={0.01}
                   value={Number(weights[k]) || 0}
-                  disabled={disabled}
+                  aria-disabled={disabled || undefined}
+                  aria-describedby={describedBy}
                   aria-valuetext={`${(share(k) * 100).toFixed(0)} percent`}
-                  onChange={(e) => setKey(k, Number(e.target.value))}
+                  onChange={(e) => {
+                    if (disabled) return
+                    setKey(k, Number(e.target.value))
+                  }}
                 />
                 <span className="weights__pct num">{total > 0 ? `${(share(k) * 100).toFixed(0)}%` : '—'}</span>
               </div>

@@ -9,7 +9,9 @@ from __future__ import annotations
 import pytest
 
 from plane_boarding.aircraft import get_aircraft
-from plane_boarding.config import BODY_DEPTH, WALKING, SHUFFLING, STOWING
+from plane_boarding.config import (
+    BODY_DEPTH, SEATED, SHUFFLING, STOWING, WALKING,
+)
 from plane_boarding.engine import run
 from plane_boarding.passengers import generate
 from plane_boarding.rng import PCG32
@@ -82,23 +84,83 @@ def test_strict_blocking_excludes_stowing_passengers_too(aid):
     assert worst >= BODY_DEPTH - 1e-3, f"closest approach was {worst:.4f} m"
 
 
-def test_only_one_passenger_squeezes_past_a_stower_at_a_time():
-    """The squeeze is a one-at-a-time mutual exclusion. If two followers were
-    ever alongside the same stowing passenger, the lock is broken."""
+def test_only_one_passenger_is_ever_in_a_stower_squeeze_gap():
+    """The squeeze is one-at-a-time, stated as what is actually guaranteed.
+
+    Two passengers can both be within a body depth of the same stower, but only
+    on OPPOSITE sides of them -- one has finished crossing and the next has
+    started. That is a handover, not a double squeeze, and it is bounded by
+    solid-body exclusion (they are still 0.4 m from each other). The lock hands
+    over when the outgoing passer's next obstruction changes rather than when it
+    is fully clear, deliberately: holding on until clear can leave a passer
+    unable to advance and the stower unable to stand up, which is a deadlock.
+
+    So the crisp invariants are: at most one body in the gap on each side, and
+    no two passengers crossing the stower's position in the same step.
+    """
     cfg, ac, result, replay, speed, lanes = trace("a320neo", "random", loadFactor=0.95)
     states, xs = replay["frames"]["state"], replay["frames"]["x"]
-    for f, st in enumerate(states):
-        row = xs[f]
-        for i, s in enumerate(st):
-            if s != STOWING:
+    n_frames = len(states)
+    assert result.completed, "the run did not finish -- something is deadlocked"
+
+    crossings = 0
+    for f in range(1, n_frames):
+        st, row, prow = states[f], xs[f], xs[f - 1]
+        for i, si in enumerate(st):
+            if si != STOWING:
                 continue
-            close = sum(
-                1 for j, s2 in enumerate(st)
-                if j != i and s2 in (WALKING, SHUFFLING) and lanes[j] == lanes[i]
-                and abs(row[j] - row[i]) < BODY_DEPTH - 1e-6
-            )
-            assert close <= 1, (
-                f"{close} passengers alongside stower {i} at frame {f}")
+            ahead = behind = 0
+            crossing_now = 0
+            for j, sj in enumerate(st):
+                if j == i or lanes[j] != lanes[i] or sj not in (WALKING, SHUFFLING):
+                    continue
+                d = row[j] - row[i]
+                if abs(d) < BODY_DEPTH - 1e-3:
+                    if d > 0:
+                        ahead += 1
+                    else:
+                        behind += 1
+                # Only a real step counts as a crossing. A passenger released
+                # from the gate jumps from the queue position to the door, which
+                # is a teleport, not an overtake.
+                if states[f - 1][j] not in (WALKING, SHUFFLING):
+                    continue
+                pd = prow[j] - prow[i]
+                if pd != 0 and d != 0 and (pd < 0) != (d < 0):
+                    crossing_now += 1
+                    crossings += 1
+            assert ahead <= 1 and behind <= 1, (
+                f"frame {f}: {ahead} ahead / {behind} behind stower {i} -- "
+                f"two bodies in the same half of the squeeze gap")
+            assert crossing_now <= 1, (
+                f"frame {f}: {crossing_now} passengers crossed stower {i} at once")
+    assert crossings > 0, "no squeeze ever happened -- this test proves nothing"
+
+
+def test_a_squeeze_always_resolves():
+    """A pair stuck inside the exclusion distance forever is the deadlock this
+    mechanism introduced twice during development. Every stower must reach a
+    frame where nobody is alongside them, and the run must terminate."""
+    cfg, ac, result, replay, speed, lanes = trace("a320neo", "random", loadFactor=0.95)
+    states, xs = replay["frames"]["state"], replay["frames"]["x"]
+    assert result.completed
+    last = len(states) - 1
+    for i, si in enumerate(states[last]):
+        assert si == SEATED
+    # No stower may still have company in the final frame of its own stow.
+    for i in range(len(lanes)):
+        fs = [f for f in range(len(states)) if states[f][i] == STOWING]
+        if not fs:
+            continue
+        f = fs[-1]
+        alongside = [
+            j for j in range(len(lanes))
+            if j != i and lanes[j] == lanes[i]
+            and states[f][j] in (WALKING, SHUFFLING)
+            and abs(xs[f][j] - xs[f][i]) < BODY_DEPTH - 1e-3
+        ]
+        assert not alongside, (
+            f"stower {i} still had {alongside} alongside on its last stowing frame")
 
 
 def test_nobody_moves_faster_than_their_own_walk_speed():
@@ -206,3 +268,34 @@ def test_zero_bag_passengers_skip_stowing_entirely():
     r, _ = run(cfg_for("a320neo", "random", seed=2, bagWeights={"0": 1.0}))
     assert r.timeBreakdown["stow"] == 0.0
     assert r.gateChecks == 0 and r.binSearches == 0
+
+
+@pytest.mark.parametrize("factor", [0.0, 0.4, 0.6])
+def test_a_shuffling_passenger_is_never_passed_at_any_squeeze_setting(factor):
+    """The asymmetry that makes the mechanism physical rather than a fudge.
+
+    A STOWING passenger has stepped into the seat-row gap, so you can edge past.
+    A SHUFFLING passenger is standing IN the aisle with the row's other
+    occupants so that a window passenger can get in -- walking through them is
+    not a thing, at any squeeze setting including the most permissive.
+    """
+    cfg, ac, result, replay, speed, lanes = trace(
+        "a320neo", "random", loadFactor=0.9, stowPassSpeedFactor=factor)
+    states, xs = replay["frames"]["state"], replay["frames"]["x"]
+
+    # (a) Nobody comes within a body depth of a shuffler.
+    worst = 1e9
+    for f, st in enumerate(states):
+        row = xs[f]
+        for i, si in enumerate(st):
+            if si != SHUFFLING:
+                continue
+            for j, sj in enumerate(st):
+                if j != i and sj in IN_AISLE and lanes[j] == lanes[i]:
+                    worst = min(worst, abs(row[j] - row[i]))
+    assert worst >= BODY_DEPTH - 1e-3, (
+        f"factor={factor}: somebody got within {worst:.4f} m of a shuffler")
+
+    # (b) And nobody ever gets past one.
+    flips = _order_flips(states, xs, lanes, ignore_stowing=True)
+    assert not flips, f"factor={factor}: illegal overtakes {flips[:5]}"

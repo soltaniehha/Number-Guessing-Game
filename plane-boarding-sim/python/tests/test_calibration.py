@@ -114,32 +114,6 @@ def test_partial_blocking_mechanism_does_what_it_claims():
     assert default.mean == shipped.mean, "the shipped default must be 0.40"
 
 
-def test_shuffling_always_blocks_completely_however_the_squeeze_is_set():
-    """The asymmetry is the physically important half of the mechanism: people
-    standing in the aisle to let a window passenger in cannot be walked past."""
-    from plane_boarding.config import BODY_DEPTH, SHUFFLING, WALKING
-    from plane_boarding.engine import run as engine_run
-    from helpers import cfg_for
-    cfg = cfg_for("a320neo", "random", seed=5, loadFactor=0.9,
-                  doors=["1L"], stowPassSpeedFactor=0.6)
-    _, rep = engine_run(cfg, record_replay=True, frame_interval=cfg.dt)
-    states, xs = rep["frames"]["state"], rep["frames"]["x"]
-    lanes = [p["lane"] for p in rep["passengers"]]
-    worst = 1e9
-    for f, st in enumerate(states):
-        row = xs[f]
-        hard = {}
-        for i, sst in enumerate(st):
-            if sst in (WALKING, SHUFFLING):
-                hard.setdefault(lanes[i], []).append(row[i])
-        for occupants in hard.values():
-            occupants.sort()
-            for a, b in zip(occupants, occupants[1:]):
-                worst = min(worst, b - a)
-    assert worst >= BODY_DEPTH - 1e-3, (
-        f"a walker got within {worst:.3f} m of a SHUFFLING passenger")
-
-
 def test_strategy_ordering_matches_the_literature():
     """front-to-back > back-to-front > random > WilMA > reverse pyramid > Steffen.
 

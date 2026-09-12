@@ -31,6 +31,11 @@
 
 .app {
   display: grid;
+  /* minmax(0, 1fr), not 1fr: an `auto`/`1fr` grid column is floored by the
+     min-content width of its widest child, so one un-shrinkable row of header
+     controls used to force the header, the viewport, the transport and the
+     status bar all wider than the screen. WCAG 1.4.10 Reflow. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   height: 100%;
   background: var(--bg);
@@ -38,8 +43,19 @@
 
 .app__body {
   display: flex;
+  min-width: 0;
   min-height: 0;
   position: relative;
+}
+
+/* The viewport is the tabpanel the header's tablist controls; it carries the
+   layout <main> used to, so <main> stays a landmark and this stays a panel. */
+.app__tabpanel {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
 }
 
 .app__panel {
@@ -76,27 +92,35 @@
   align-items: center;
   gap: 16px;
   height: 54px;
+  min-width: 0;
   padding: 0 14px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
 
 .header__brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.header__drawer { display: none; }
+/* Raised above `.btn { display: inline-flex }`, which follows it in the
+   cascade at equal specificity and used to defeat it — leaving the drawer
+   button rendered at every width as the first tab stop on the page, opening a
+   scrim with no drawer behind it and no way out. */
+.header .header__drawer { display: none; }
 .mark { color: var(--accent); flex: none; }
 
 .header__title {
   margin: 0;
+  min-width: 0;
   font-size: 15px;
   font-weight: 650;
   letter-spacing: -0.01em;
+  /* nowrap is right for a title, but only with somewhere for the overflow to
+     go; without this the brand had a hard floor the whole page inherited. */
   white-space: nowrap;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tag {
+  flex: none;
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -108,16 +132,21 @@
   border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
 }
 
-.header__actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.header__actions { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: none; }
 
 .tabs {
   display: flex;
   gap: 2px;
   padding: 3px;
   background: var(--surface-2);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius);
+  /* The tablist scrolls on its own rather than pushing the page wider. */
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
+.tabs::-webkit-scrollbar { display: none; }
 
 .tab {
   display: flex;
@@ -131,6 +160,7 @@
   font: inherit;
   font-size: 13px;
   font-weight: 550;
+  white-space: nowrap;
   cursor: pointer;
 }
 .tab:hover { color: var(--text); background: color-mix(in srgb, var(--text) 6%, transparent); }
@@ -155,7 +185,9 @@
   height: 30px;
   padding: 0 12px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
+  /* Interactive boundaries use --border-strong; --border is for dividers.
+     A control whose edge is invisible is not visibly a control (WCAG 1.4.11). */
+  border: 1px solid var(--border-strong);
   background: var(--surface-2);
   color: var(--text);
   font: inherit;
@@ -164,11 +196,12 @@
   cursor: pointer;
   white-space: nowrap;
 }
-.btn:hover:not(:disabled) { background: var(--surface-3); border-color: var(--border-strong); }
-.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn:hover:not(:disabled):not([aria-disabled='true']) { background: var(--surface-3); border-color: var(--border-strong); }
+.btn:disabled,
+.btn[aria-disabled='true'] { opacity: 0.45; cursor: not-allowed; }
 
 .btn--icon { width: 30px; padding: 0; color: var(--text-2); }
-.btn--icon:hover:not(:disabled) { color: var(--text); }
+.btn--icon:hover:not(:disabled):not([aria-disabled='true']) { color: var(--text); }
 
 .btn--run {
   height: 32px;
@@ -178,7 +211,7 @@
   color: var(--text-inv);
   font-weight: 600;
 }
-.btn--run:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn--run:hover:not(:disabled):not([aria-disabled='true']) { background: var(--accent-hover); border-color: var(--accent-hover); }
 .btn__glyph { display: inline-flex; }
 .spinner { animation: spin 0.8s linear infinite; }
 
@@ -190,7 +223,7 @@
   border-color: var(--accent);
   color: var(--text-inv);
 }
-.btn--play:hover:not(:disabled) { background: var(--accent-hover); }
+.btn--play:hover:not(:disabled):not([aria-disabled='true']) { background: var(--accent-hover); }
 
 /* -------------------------------------------------------- control panel -- */
 
@@ -275,7 +308,8 @@
   cursor: pointer;
   display: block;
 }
-.slider:disabled { cursor: not-allowed; }
+.slider:disabled,
+.slider[aria-disabled='true'] { cursor: not-allowed; }
 .slider::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: var(--surface-3); }
 .slider::-moz-range-track { height: 4px; border-radius: 2px; background: var(--surface-3); }
 .slider::-webkit-slider-thumb {
@@ -295,8 +329,10 @@
   background: var(--accent);
   border: 2px solid var(--surface);
 }
-.slider:disabled::-webkit-slider-thumb { background: var(--text-3); }
-.slider:disabled::-moz-range-thumb { background: var(--text-3); }
+.slider:disabled::-webkit-slider-thumb,
+.slider[aria-disabled='true']::-webkit-slider-thumb { background: var(--text-3); }
+.slider:disabled::-moz-range-thumb,
+.slider[aria-disabled='true']::-moz-range-thumb { background: var(--text-3); }
 .slider--mini { height: 14px; }
 .slider--mini::-webkit-slider-thumb { width: 11px; height: 11px; margin-top: -4px; }
 .slider--mini::-moz-range-thumb { width: 11px; height: 11px; }
@@ -342,7 +378,8 @@
 .switch.is-on .switch__track { background: var(--accent); border-color: var(--accent); }
 .switch.is-on .switch__thumb { transform: translateX(15px); }
 .switch__state { font-size: 11.5px; }
-.switch:disabled { cursor: not-allowed; }
+.switch:disabled,
+.switch[aria-disabled='true'] { cursor: not-allowed; }
 
 /* ----------------------------------------------------------- segmented -- */
 
@@ -351,7 +388,7 @@
   gap: 2px;
   padding: 2px;
   background: var(--surface-2);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
 }
 .segmented__item {
@@ -367,9 +404,10 @@
   cursor: pointer;
   white-space: nowrap;
 }
-.segmented__item:hover:not(:disabled) { color: var(--text); }
+.segmented__item:hover:not(:disabled):not([aria-disabled='true']) { color: var(--text); }
 .segmented__item.is-active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
-.segmented__item:disabled { opacity: 0.4; cursor: not-allowed; }
+.segmented__item:disabled,
+.segmented__item[aria-disabled='true'] { opacity: 0.4; cursor: not-allowed; }
 
 /* -------------------------------------------------------------- weights -- */
 
@@ -396,7 +434,7 @@
   height: 30px;
   padding: 0 9px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   background: var(--surface-2);
   color: var(--text);
   font: inherit;
@@ -424,7 +462,7 @@
   align-items: center;
   gap: 9px;
   padding: 6px 9px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: var(--surface-2);
   cursor: pointer;
@@ -432,6 +470,7 @@
 .door:hover { border-color: var(--border-strong); }
 .door.is-on { border-color: color-mix(in srgb, var(--good) 55%, var(--border)); background: color-mix(in srgb, var(--good) 8%, var(--surface-2)); }
 .door.is-locked { cursor: not-allowed; }
+.door__input[aria-disabled='true'] { cursor: not-allowed; }
 .door__input { accent-color: var(--good); margin: 0; }
 .door__id { font-size: 12px; font-weight: 600; }
 .door__meta { font-size: 10.5px; color: var(--text-3); text-align: right; }
@@ -444,7 +483,7 @@
   flex-direction: column;
   gap: 1px;
   padding: 7px 9px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: var(--surface-2);
   color: var(--text-2);
@@ -470,7 +509,7 @@
   flex-direction: column;
   gap: 3px;
   padding: 9px 11px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: var(--surface-2);
   font: inherit;
@@ -492,6 +531,7 @@
 
 .viewport {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   padding: 18px;
   display: flex;
@@ -599,7 +639,7 @@
   align-items: center;
   gap: 6px;
   padding: 4px 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 999px;
   background: var(--surface);
   font-size: 11.5px;
@@ -612,7 +652,18 @@
 
 /* ------------------------------------------------------------- ranking --- */
 
-.tablewrap { overflow-x: auto; margin-bottom: 20px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+/* A scroll container needs min-width:0 to actually be one: without it the
+   720px table below still floors the page width instead of scrolling. It is
+   also keyboard focusable (P8) — a region you can only reach with a mouse is
+   not reachable. */
+.tablewrap {
+  overflow-x: auto;
+  min-width: 0;
+  margin-bottom: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
 .rank { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 720px; }
 .rank__caption { caption-side: bottom; padding: 9px 14px; font-size: 11px; color: var(--text-3); text-align: left; }
 .rank th, .rank td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); }
@@ -640,7 +691,9 @@
 
 .transport {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  min-width: 0;
   gap: 12px;
   padding: 9px 18px;
   border-top: 1px solid var(--border);
@@ -671,7 +724,7 @@
 }
 .scrub::-moz-range-thumb { width: 13px; height: 13px; border-radius: 50%; background: var(--accent); border: 2px solid var(--surface); }
 
-.speeds { display: flex; gap: 1px; padding: 2px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.speeds { display: flex; gap: 1px; padding: 2px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); }
 .speeds__item {
   padding: 3px 7px;
   border: 0;
@@ -692,6 +745,7 @@
   align-items: center;
   gap: 22px;
   height: 40px;
+  min-width: 0;
   padding: 0 18px;
   background: var(--surface);
   border-top: 1px solid var(--border);
@@ -801,14 +855,20 @@ kbd {
     flex: none;
   }
   .app__paneltitle { flex: 1; font-size: 12px; font-weight: 650; letter-spacing: 0.05em; text-transform: uppercase; }
-  .header__drawer { display: inline-flex; }
+  .header .header__drawer { display: inline-flex; }
   .header { gap: 10px; padding: 0 10px; }
   .header__title { font-size: 14px; }
 }
 
-@media (max-width: 620px) {
+/* The title is the first thing to go: below this the header cannot seat the
+   brand, the tablist and the actions at once, and an ellipsised "Boarding…"
+   is worth less than a page that does not scroll sideways. */
+@media (max-width: 760px) {
   .header__title { display: none; }
   .tabs { margin-left: auto; }
+}
+
+@media (max-width: 620px) {
   .tab { padding: 5px 9px; }
   .tab__key { display: none; }
   .viewport { padding: 14px; }

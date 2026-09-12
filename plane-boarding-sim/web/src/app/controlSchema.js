@@ -25,6 +25,29 @@ const mps = (v) => `${v.toFixed(2)} m/s`
 const plain = (v) => `${v}`
 const fixed2 = (v) => v.toFixed(2)
 
+/* ----------------------------------------------------------- announcement */
+/*
+ * `format` is what the eye reads; `announce` is what a screen reader says, and
+ * they are not the same string. "16.0s" is read out as the bare letter S, and
+ * a `plain` or `fixed2` value is read as a naked number — "9" for "Movements:
+ * both block" tells a listener nothing. Every slider therefore carries an
+ * `announce` formatter, used for aria-valuetext (see controls/Slider.jsx).
+ */
+
+/** Trim a value to something worth saying out loud: 16, 2.4, 0.05. */
+const sayNum = (v) => {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return String(v)
+  return String(Number(n.toFixed(2)))
+}
+/** "1 bag" / "4 bags" — a count with the thing it counts. */
+const count = (one, many) => (v) => `${sayNum(v)} ${Number(v) === 1 ? one : many}`
+const saySecs = (v) => `${sayNum(v)} ${Number(v) === 1 ? 'second' : 'seconds'}`
+const sayPct = (v) => `${(v * 100).toFixed(v * 100 < 10 ? 1 : 0)} percent`
+const sayMps = (v) => `${v.toFixed(2)} metres per second`
+/** A dimensionless number that still needs saying what it is a number of. */
+const sayOf = (what) => (v) => `${v.toFixed(2)} ${what}`
+
 /** @type {Array<object>} */
 export const CONTROLS = [
   // ---------------------------------------------------------------- scenario
@@ -51,6 +74,7 @@ export const CONTROLS = [
     max: 1,
     step: 0.01,
     format: pct,
+    announce: sayPct,
     explain: 'How full the aircraft is — the fraction of seats with a body in them.',
   },
   {
@@ -69,6 +93,7 @@ export const CONTROLS = [
     max: 1000,
     step: 10,
     format: plain,
+    announce: count('replication', 'replications'),
     explain: 'How many independent flights to simulate per strategy in Analytics and Compare.',
   },
 
@@ -121,6 +146,7 @@ export const CONTROLS = [
     max: 1.6,
     step: 0.01,
     format: mps,
+    announce: sayMps,
     explain: 'Free-flow walking pace down an empty aisle. About 0.9 m/s is a normal unhurried walk.',
   },
   {
@@ -132,6 +158,7 @@ export const CONTROLS = [
     max: 0.5,
     step: 0.01,
     format: fixed2,
+    announce: sayOf('metres per second of spread'),
     explain: 'Spread of walking pace across people. Bigger means more dawdlers behind whom everyone piles up.',
   },
   {
@@ -143,6 +170,7 @@ export const CONTROLS = [
     max: 0.2,
     step: 0.005,
     format: pct,
+    announce: sayPct,
     explain: 'Share needing wheelchair or assistance boarding, or unaccompanied minors — they board before everyone.',
   },
   {
@@ -154,6 +182,7 @@ export const CONTROLS = [
     max: 0.4,
     step: 0.005,
     format: pct,
+    announce: sayPct,
     explain: 'Share who walk and stow noticeably slower without needing formal assistance.',
   },
   {
@@ -165,6 +194,7 @@ export const CONTROLS = [
     max: 1,
     step: 0.01,
     format: fixed2,
+    announce: sayOf('times normal walking pace'),
     explain: 'How much slower those passengers walk, as a multiple of normal pace.',
   },
   {
@@ -176,6 +206,7 @@ export const CONTROLS = [
     max: 3,
     step: 0.05,
     format: fixed2,
+    announce: sayOf('times the normal stow time'),
     explain: 'How much longer those passengers take to lift a bag into the bin.',
   },
   {
@@ -187,6 +218,7 @@ export const CONTROLS = [
     max: 0.6,
     step: 0.01,
     format: pct,
+    announce: sayPct,
     explain: 'Share of multi-person parties that include a child — they board as a unit and settle slowly.',
   },
   {
@@ -219,6 +251,7 @@ export const CONTROLS = [
     max: 34,
     step: 0.5,
     format: secs,
+    announce: saySecs,
     explain: 'How long a typical passenger takes to heave one bag into the bin. Each extra piece is a fresh, independent struggle.',
   },
   {
@@ -230,6 +263,7 @@ export const CONTROLS = [
     max: 3.5,
     step: 0.05,
     format: fixed2,
+    announce: sayOf('Weibull shape'),
     explain: 'Higher means stow times cluster tightly; lower means a long tail of people who really cannot get it up there.',
   },
   {
@@ -241,6 +275,7 @@ export const CONTROLS = [
     max: 30,
     step: 0.5,
     format: secs,
+    announce: saySecs,
     explain: 'How long a typical passenger takes to heave one bag into the overhead bin.',
   },
   {
@@ -252,6 +287,7 @@ export const CONTROLS = [
     max: 1.2,
     step: 0.01,
     format: fixed2,
+    announce: sayOf('of the mean'),
     explain: 'Run-to-run randomness in a single stow, as a fraction of its mean.',
   },
   {
@@ -263,6 +299,7 @@ export const CONTROLS = [
     max: 1.3,
     step: 0.01,
     format: fixed2,
+    announce: sayOf('exponent'),
     explain: 'How much cheaper the second bag is than the first. Below 1.0, two bags take less than twice as long.',
   },
   {
@@ -274,6 +311,7 @@ export const CONTROLS = [
     max: 0.8,
     step: 0.01,
     format: fixed2,
+    announce: sayOf('of the mean, per person'),
     explain: 'How much people differ from each other in handling luggage \u2014 some are simply quicker every time.',
   },
   {
@@ -285,6 +323,7 @@ export const CONTROLS = [
     max: 6,
     step: 0.1,
     format: secs,
+    announce: saySecs,
     explain: 'One elementary movement: standing up, stepping into the aisle, stepping back, or sitting down.',
   },
   {
@@ -296,6 +335,7 @@ export const CONTROLS = [
     max: 4,
     step: 0.1,
     format: secs,
+    announce: saySecs,
     advanced: true,
     explain: 'The quickest anyone manages a single movement.',
   },
@@ -308,6 +348,7 @@ export const CONTROLS = [
     max: 9,
     step: 0.1,
     format: secs,
+    announce: saySecs,
     advanced: true,
     explain: 'The slowest a single movement takes \u2014 the passenger who needs a moment.',
   },
@@ -320,6 +361,7 @@ export const CONTROLS = [
     max: 6,
     step: 1,
     format: plain,
+    announce: count('movement', 'movements'),
     explain: 'Movements needed just to sit down when nobody is in the way. Even this is not free.',
   },
   {
@@ -331,6 +373,7 @@ export const CONTROLS = [
     max: 14,
     step: 1,
     format: plain,
+    announce: count('movement', 'movements'),
     explain: 'Movements when the aisle seat is already taken and its occupant has to get out.',
   },
   {
@@ -342,6 +385,7 @@ export const CONTROLS = [
     max: 14,
     step: 1,
     format: plain,
+    announce: count('movement', 'movements'),
     explain: 'Movements when the middle seat is occupied but the aisle seat is free.',
   },
   {
@@ -353,6 +397,7 @@ export const CONTROLS = [
     max: 20,
     step: 1,
     format: plain,
+    announce: count('movement', 'movements'),
     explain: 'The window-passenger-arrives-last case: two seated neighbours both have to get up.',
   },
   {
@@ -364,6 +409,7 @@ export const CONTROLS = [
     max: 10,
     step: 1,
     format: plain,
+    announce: count('movement', 'movements'),
     explain: 'Much cheaper: your own family stands up for you without the polite negotiation.',
   },
   {
@@ -375,6 +421,7 @@ export const CONTROLS = [
     max: 25,
     step: 0.5,
     format: secs,
+    announce: saySecs,
     explain: 'Time lost when one already-seated neighbour has to get up to let you in.',
   },
   {
@@ -386,6 +433,7 @@ export const CONTROLS = [
     max: 40,
     step: 0.5,
     format: secs,
+    announce: saySecs,
     explain: 'Time lost when two seated neighbours have to get up \u2014 the window-seat-arrives-last penalty.',
   },
   {
@@ -397,6 +445,7 @@ export const CONTROLS = [
     max: 1.2,
     step: 0.01,
     format: fixed2,
+    announce: sayOf('of the mean'),
     explain: 'Randomness in how long a seat shuffle takes.',
   },
   {
@@ -408,6 +457,7 @@ export const CONTROLS = [
     max: 12,
     step: 0.5,
     format: secs,
+    announce: saySecs,
     explain: 'Much faster: your own family stands up for you without the polite negotiation.',
   },
   {
@@ -419,6 +469,7 @@ export const CONTROLS = [
     max: 10,
     step: 0.1,
     format: secs,
+    announce: saySecs,
     explain: 'Average gap between passengers reaching the aircraft door \u2014 the rate the gate can physically feed the jet bridge.',
   },
   {
@@ -430,6 +481,7 @@ export const CONTROLS = [
     max: 10,
     step: 0.1,
     format: secs,
+    announce: saySecs,
     explain: 'Seconds between boarding-pass scans \u2014 the rate the gate can physically feed the jet bridge.',
   },
   {
@@ -441,6 +493,7 @@ export const CONTROLS = [
     max: 5,
     step: 0.1,
     format: secs,
+    announce: saySecs,
     explain: 'Variability of the scan interval: misread passes, seat changes, arguments.',
   },
 
@@ -454,6 +507,7 @@ export const CONTROLS = [
     max: 10,
     step: 1,
     format: plain,
+    announce: count('bag', 'bags'),
     autoLabel: 'Use airframe',
     explain: 'How many bags fit in the bin above one side of one row. Bin volume is an airframe property; override it to model a retrofit.',
   },
@@ -466,6 +520,7 @@ export const CONTROLS = [
     max: 8,
     step: 1,
     format: (v) => `${v} rows`,
+    announce: count('row', 'rows'),
     explain: 'How many rows away a passenger will wander looking for a free bin before giving up.',
   },
   {
@@ -477,6 +532,7 @@ export const CONTROLS = [
     max: 15,
     step: 0.5,
     format: secs,
+    announce: saySecs,
     explain: 'Extra seconds spent per row of displacement while hunting for space.',
   },
   {
@@ -488,6 +544,7 @@ export const CONTROLS = [
     max: 90,
     step: 1,
     format: secs,
+    announce: saySecs,
     explain: 'The full stop when a bag has to go back down the jet bridge — tag, wait, hand over.',
   },
   {
@@ -499,6 +556,7 @@ export const CONTROLS = [
     max: 1.5,
     step: 0.05,
     format: fixed2,
+    announce: sayOf('of the base stow time'),
     explain: 'How much longer stowing takes as a bin fills up and bags must be rearranged.',
   },
 
@@ -512,6 +570,7 @@ export const CONTROLS = [
     max: 8,
     step: 1,
     format: plain,
+    announce: count('zone', 'zones'),
     explain: 'How many row bands the gate calls. More zones means finer control and more announcements.',
   },
   {
@@ -537,6 +596,7 @@ export const CONTROLS = [
     max: 0.5,
     step: 0.005,
     format: pct,
+    announce: sayPct,
     explain: 'Share of passengers who ignore their group call and drift up or down the queue.',
   },
   {
@@ -548,6 +608,7 @@ export const CONTROLS = [
     max: 25,
     step: 1,
     format: (v) => `±${v}`,
+    announce: (v) => `plus or minus ${sayNum(v)} queue ${Number(v) === 1 ? 'place' : 'places'}`,
     explain: 'How far out of position those passengers end up, in queue places.',
   },
   {
@@ -559,6 +620,7 @@ export const CONTROLS = [
     max: 0.12,
     step: 0.002,
     format: pct,
+    announce: sayPct,
     explain: 'Share who turn up after their group has gone and board at the very end.',
   },
   {
@@ -583,6 +645,7 @@ export const CONTROLS = [
     max: 0.5,
     step: 0.05,
     format: secs,
+    announce: saySecs,
     advanced: true,
     explain: 'Simulation tick length. Smaller is more exact and slower; 0.1 s is the calibrated value.',
   },
@@ -595,6 +658,7 @@ export const CONTROLS = [
     max: 10,
     step: 0.5,
     format: secs,
+    announce: saySecs,
     advanced: true,
     explain: 'How often curves are recorded. Only affects chart resolution, never the result.',
   },

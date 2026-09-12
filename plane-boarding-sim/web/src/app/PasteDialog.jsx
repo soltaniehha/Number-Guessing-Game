@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Modal } from './Modal.jsx'
 import { useStore } from '../state/StoreProvider.jsx'
 
@@ -7,6 +7,18 @@ export function PasteDialog({ initial }) {
   const { loadConfig, setModal, setToast } = useStore()
   const [text, setText] = useState(initial || '')
   const [error, setError] = useState(null)
+  const touched = useRef(false)
+
+  // The clipboard prefill, if it arrives at all, arrives after the dialog is
+  // already on screen (see PresetSection). Adopt it — unless the user has
+  // started typing, in which case what they typed wins.
+  useEffect(() => {
+    if (!touched.current && typeof initial === 'string' && initial) setText(initial)
+  }, [initial])
+
+  // Stable, so the dialog's key listener is not town down and rebuilt on every
+  // keystroke. See app/focusTrap.js.
+  const close = useCallback(() => setModal(null), [setModal])
 
   const load = () => {
     try {
@@ -23,10 +35,10 @@ export function PasteDialog({ initial }) {
   return (
     <Modal
       title="Load a config"
-      onClose={() => setModal(null)}
+      onClose={close}
       footer={
         <>
-          <button type="button" className="btn" onClick={() => setModal(null)}>
+          <button type="button" className="btn" onClick={close}>
             Cancel
           </button>
           <button type="button" className="btn btn--run" onClick={load} disabled={!text.trim()}>
@@ -48,6 +60,7 @@ export function PasteDialog({ initial }) {
         aria-label="Config JSON"
         placeholder='{ "strategy": "wilma", "loadFactor": 0.95 }'
         onChange={(e) => {
+          touched.current = true
           setText(e.target.value)
           setError(null)
         }}

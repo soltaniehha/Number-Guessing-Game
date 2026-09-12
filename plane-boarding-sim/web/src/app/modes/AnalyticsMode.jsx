@@ -39,7 +39,7 @@ export function AnalyticsMode() {
         {batch.result && hasChartGrid && (
           <ErrorBoundary label="The chart grid">
             <Suspense fallback={<div className="viewport__loading">Loading charts…</div>}>
-              <ChartGrid batch={batch.result} runs={collectRuns(batch.result)} live={batch.running} running={batch.running} />
+              <ChartGrid batch={batch.result} running={batch.running} />
             </Suspense>
           </ErrorBoundary>
         )}
@@ -51,7 +51,3 @@ export function AnalyticsMode() {
   )
 }
 
-/** Flatten the sample runs the aggregator kept, for chart components that want raw RunResults. */
-export function collectRuns(result) {
-  return Object.values(result?.byStrategy || result?.strategies || {}).flatMap((s) => s.sample || [])
-}
