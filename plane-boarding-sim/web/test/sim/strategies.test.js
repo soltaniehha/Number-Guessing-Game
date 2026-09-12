@@ -7,7 +7,7 @@ import { ConfigError } from '../../src/sim/config.js'
 import { simulate } from '../../src/sim/engine.js'
 import { generate } from '../../src/sim/passengers.js'
 import { PCG32 } from '../../src/sim/rng.js'
-import { STRATEGIES } from '../../src/sim/strategies.js'
+import { STRATEGIES, weibullMeanFactor } from '../../src/sim/strategies.js'
 import { runBatch } from '../../src/sim/batch.js'
 import { cfgFor, cleanCfg, makeQueue } from './helpers.js'
 
@@ -450,6 +450,40 @@ it('consumes the compliance Bernoulli even at zero jitter', () => {
   expect(order({ nonComplianceRate: 0.0, lateRate: 0.3 })).not.toEqual(
     order({ nonComplianceRate: 0.15, lateRate: 0.3 }),
   )
+})
+
+// Gamma(1 + 1/shape) at nine shapes spanning the slider, pinned so a drift in
+// either language's log/exp shows up here rather than as a silent parity break.
+// `python/tests/test_strategies.py` pins the identical table.
+const WEIBULL_MEAN_FACTORS = [
+  [1.0, 1.0],
+  [1.05, 0.980793],
+  [1.5, 0.902745],
+  [1.7, 0.892245],
+  [2.0, 0.886227],
+  [2.5, 0.887264],
+  [3.0, 0.89298],
+  [3.3, 0.897015],
+  [3.5, 0.899747],
+]
+
+it('makes the Weibull mean factor track the configured shape', () => {
+  // `stratSlowestFirst` used to hard-code 0.8929795 for this. Two things were
+  // wrong with that: it silently stopped meaning anything as soon as anybody
+  // moved the `stowWeibullShape` slider, and it was not even the right number
+  // for the shipped shape -- Gamma(1 + 1/1.7) is 0.892245.
+  for (const [shape, expected] of WEIBULL_MEAN_FACTORS) {
+    expect(weibullMeanFactor(shape), `shape ${shape}`).toBe(expected)
+  }
+  expect(weibullMeanFactor(1.7)).not.toBe(0.8929795)
+})
+
+it('lets the stow shape reach the slowest-first ordering', () => {
+  // The regression the hard-coded constant hid: change the shape, and the
+  // ordering the strategy produces must change with it.
+  const ids = (stowWeibullShape) =>
+    makeQueue(cleanCfg('a320neo', 'slowest_first', 4, { stowWeibullShape })).queue.map((p) => p.id)
+  expect(ids(1.2)).not.toEqual(ids(3.4))
 })
 
 it('rejects an unknown strategy clearly', () => {

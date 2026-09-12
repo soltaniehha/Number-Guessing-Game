@@ -7,7 +7,7 @@ import { SeatedCurve } from './SeatedCurve.jsx'
 import { CongestionHeatmap } from './CongestionHeatmap.jsx'
 import { TimeBreakdown } from './TimeBreakdown.jsx'
 import { InterferenceCounts } from './InterferenceCounts.jsx'
-import { LoadFactorSweep } from './LoadFactorSweep.jsx'
+import { ParameterSweep } from './ParameterSweep.jsx'
 import { WaitTimeBoxes } from './WaitTimeBoxes.jsx'
 import { SeatPositionHeatmap } from './SeatPositionHeatmap.jsx'
 import { Convergence } from './Convergence.jsx'
@@ -98,10 +98,10 @@ const CHART_DEFS = [
     legendKind: 'rect',
   },
   {
-    id: 'load-sweep',
-    Component: LoadFactorSweep,
-    note: 'Whether the ranking survives a half-empty flight.',
-    hint: 'Boarding time against load factor. Crossing lines mean the best strategy depends on how full the aircraft is.',
+    id: 'param-sweep',
+    Component: ParameterSweep,
+    note: 'Whether the ranking survives a change of scenario.',
+    hint: 'Boarding time against the swept parameter — load factor unless the panel says otherwise. Crossing lines mean the best strategy depends on where you sit on that axis.',
     legendKind: 'line',
   },
   {
@@ -158,7 +158,10 @@ export function ChartGrid({ batch, running = false, className = '' }) {
     if (all.length === 0) return 'No batch loaded yet.'
     const perStrategy = requested ? ` of ${formatNumber(requested)} each` : ''
     if (running) return `Streaming — ${formatNumber(runs)} replications${perStrategy}.`
-    if (complete) return `Complete — ${formatNumber(runs)} replications across ${all.length} strategies.`
+    if (complete) {
+      const plural = all.length === 1 ? 'strategy' : 'strategies'
+      return `Complete — ${formatNumber(runs)} replications across ${formatNumber(all.length)} ${plural}.`
+    }
     return `Paused — ${formatNumber(runs)} replications so far${perStrategy}.`
   }, [all.length, complete, requested, running, runs])
 

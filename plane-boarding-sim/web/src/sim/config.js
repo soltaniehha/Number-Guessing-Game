@@ -81,19 +81,46 @@ export class ConfigError extends Error {
  * ascending numeric order anyway, but relying on that is exactly the kind of
  * implicit agreement this project refuses to depend on.
  */
+/**
+ * Python's `int(s)` for a JSON object key.
+ *
+ * `Number("1.0")` is 1 and `Number.isInteger` agrees, but `int("1.0")` raises --
+ * so the loose check this replaces accepted keys the reference engine rejects,
+ * and a config that worked in the browser died in Python. `int()` allows
+ * surrounding whitespace and a leading sign and nothing else, which is exactly
+ * what this pattern spells.
+ */
+const INT_KEY = /^[+-]?\d+$/
+
+function pyInt(text, name, what) {
+  if (!INT_KEY.test(String(text).trim())) {
+    throw new ConfigError(`${name}: ${what} must be integers, got ${JSON.stringify(text)}`)
+  }
+  return Number(String(text).trim())
+}
+
+/**
+ * Python's `float(x)` for a JSON weight: a number, or a string that parses as
+ * one. `Number()` yields NaN for anything else and NaN then slips through every
+ * comparison below (`NaN < 0` is false, `NaN <= 0` is false), so a garbage
+ * weight used to sail through here and raise a ValueError in Python instead.
+ */
+function pyFloat(value, name) {
+  const n = typeof value === 'number' ? value : Number(String(value).trim())
+  if (!Number.isFinite(n)) {
+    throw new ConfigError(`${name}: weights must be numbers, got ${JSON.stringify(value)}`)
+  }
+  return n
+}
+
 function numericWeightMap(raw, name) {
   const rawKeys = Object.keys(raw || {})
-  const keys = []
-  for (const k of rawKeys) {
-    const n = Number(k)
-    if (!Number.isInteger(n)) {
-      throw new ConfigError(`${name}: keys must be integers, got ${JSON.stringify(rawKeys)}`)
-    }
-    keys.push(n)
-  }
+  const keys = rawKeys.map((k) => pyInt(k, name, 'keys'))
   keys.sort((a, b) => a - b)
-  const weights = keys.map((k) => Number(raw[String(k)]))
   if (keys.length === 0) throw new ConfigError(`${name}: must not be empty`)
+  // Python reads `raw[str(k)]` first and falls back to `raw[k]`; in JS every key
+  // is already a string, so `String(k)` is the only spelling there is.
+  const weights = keys.map((k) => pyFloat(raw[String(k)], name))
   if (weights.some((w) => w < 0)) throw new ConfigError(`${name}: weights must be non-negative`)
   let total = 0
   for (const w of weights) total += w
@@ -104,7 +131,7 @@ function numericWeightMap(raw, name) {
 /** String-keyed weights keep JSON insertion order, which both languages preserve. */
 function stringWeightMap(raw, name) {
   const keys = Object.keys(raw || {}).map(String)
-  const weights = keys.map((k) => Number(raw[k]))
+  const weights = keys.map((k) => pyFloat(raw[k], name))
   if (keys.length === 0) throw new ConfigError(`${name}: must not be empty`)
   let total = 0
   for (const w of weights) total += w

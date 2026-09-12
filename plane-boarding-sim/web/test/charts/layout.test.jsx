@@ -13,6 +13,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import { Convergence } from '../../src/charts/Convergence.jsx'
+import { ParameterSweep } from '../../src/charts/ParameterSweep.jsx'
 import { makeBatch } from '../../src/charts/__fixtures__/makeBatch.js'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
@@ -41,6 +42,26 @@ describe('the card grid survives a container narrower than a card', () => {
     const rule = CSS.match(/\.cg-grid\s*{[^}]*}/)[0]
     expect(rule).toMatch(/minmax\(\s*min\(360px,\s*100%\)\s*,\s*1fr\s*\)/)
     expect(rule).not.toMatch(/minmax\(\s*360px/)
+  })
+})
+
+/** The same collision, on the other chart with an m:ss y axis. */
+describe('ParameterSweep axis furniture does not collide', () => {
+  it('puts the rotated axis title clear of the m:ss tick labels', () => {
+    const base = makeBatch({ runs: 8, strategies: ['wilma', 'random'], sweep: false })
+    const batch = {
+      ...base,
+      sweep: {
+        param: 'loadFactor',
+        values: [0.5, 0.75, 1],
+        byStrategy: { wilma: [880, 900, 940], random: [980, 1000, 1040] },
+      },
+    }
+    const container = render(<ParameterSweep batch={batch} hidden={new Set()} />)
+    const title = [...container.querySelectorAll('text')].find((t) => t.textContent === 'Boarding time (m:ss)')
+    expect(title, 'the y-axis title must be rendered').toBeTruthy()
+    const x = Number(title.getAttribute('transform').match(/translate\((-?[\d.]+)/)[1])
+    expect(x).toBeLessThanOrEqual(-48)
   })
 })
 

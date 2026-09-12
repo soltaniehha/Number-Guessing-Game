@@ -24,7 +24,7 @@ import {
   SERVICE_STREAM_STRIDE,
 } from './config.js'
 import { PCG32 } from './rng.js'
-import { floorDiv, sortByKey, sortByTuple } from './pyutil.js'
+import { floorDiv, pyRound, sortByKey, sortByTuple } from './pyutil.js'
 
 /** Tiers that buy you an earlier slot within your group (never ahead of everyone). */
 export const ELITE_TIERS = ['first', 'business', 'premium', 'elite_top', 'elite_mid']
@@ -556,8 +556,56 @@ function stratByBags(pax, ac, cfg, rng) {
  * early and let fast passengers fill in behind. Erland/Steffen find this beats
  * random mainly by cutting variance rather than the mean.
  */
+/**
+ * Lanczos g=7, n=9 coefficients. The same series `web/src/lib/simParams.js` uses
+ * to turn a Weibull scale into a mean for the control panel's readouts.
+ */
+const LANCZOS_G = [
+  676.5203681218851, -1259.1392167224028, 771.32342877765313, -176.61502916214059,
+  12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7,
+]
+
+/**
+ * log-gamma by the Lanczos series, spelled out rather than calling a library.
+ *
+ * Written out because Python's `math.lgamma` has no JavaScript counterpart and
+ * the two engines must run the SAME arithmetic, not two library implementations
+ * that happen to agree.
+ */
+function lgamma(z) {
+  const x = z - 1.0
+  let a = 0.99999999999980993
+  const t = x + 7.5
+  for (let k = 0; k < 8; k++) a += LANCZOS_G[k] / (x + k + 1.0)
+  return 0.5 * Math.log(2.0 * Math.PI) + (x + 0.5) * Math.log(t) - t + Math.log(a)
+}
+
+/**
+ * Mean of Weibull(shape, 1) = Gamma(1 + 1/shape), rounded to 6 dp.
+ *
+ * `stowWeibullShape` is a live slider (1.0 to 3.5), so this cannot be a constant
+ * -- and it used to be one, hard-coded as 0.8929795 with the comment "mean of
+ * Weibull(1.7, 1)". That number was also simply **wrong**: the true value at the
+ * shipped shape of 1.7 is 0.892245, so the estimator was off by 8e-4 in a way
+ * nothing would ever have flagged.
+ *
+ * **The rounding is the parity contract, not sloppiness.** `Math.log`/`Math.exp`
+ * and Python's `math.log`/`exp` are not required to agree to the last bit, and
+ * measured over the 51 reachable slider positions they disagree at two of them
+ * -- by up to 8 ulps at shape 1.05. Rounding to 6 dp erases that difference:
+ * verified identical across all 2501 shapes from 1.000 to 3.500 in steps of
+ * 0.001, in both languages. Six decimal places is also several orders of
+ * magnitude more precision than a ranking heuristic can use.
+ */
+export function weibullMeanFactor(shape) {
+  return pyRound(Math.exp(lgamma(1.0 + 1.0 / shape)), 6)
+}
+
 function stratSlowestFirst(pax, ac, cfg, rng) {
-  const perBag = cfg.stowWeibullScale * 0.8929795 // mean of Weibull(1.7, 1) ~ Gamma(1+1/k)
+  // Gamma(1 + 1/shape) computed from the CONFIGURED shape. This used to be the
+  // constant 0.8929795, which stopped meaning anything the moment anybody
+  // touched the `stowWeibullShape` slider -- and was wrong for 1.7 anyway.
+  const perBag = cfg.stowWeibullScale * weibullMeanFactor(cfg.stowWeibullShape)
   const perMove = (cfg.shuffleMoveMin + cfg.shuffleMoveMode + cfg.shuffleMoveMax) / 3.0
   const moves = cfg.shuffleMovements
 

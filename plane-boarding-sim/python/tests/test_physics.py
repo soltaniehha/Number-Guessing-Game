@@ -385,6 +385,7 @@ def test_a_shuffling_passenger_is_never_passed_at_any_squeeze_setting(factor):
 
     # (a) Nobody comes within a body depth of a shuffler.
     worst = 1e9
+    pairs = 0
     for f, st in enumerate(states):
         row = xs[f]
         for i, si in enumerate(st):
@@ -392,7 +393,14 @@ def test_a_shuffling_passenger_is_never_passed_at_any_squeeze_setting(factor):
                 continue
             for j, sj in enumerate(st):
                 if j != i and sj in IN_AISLE and lanes[j] == lanes[i]:
+                    pairs += 1
                     worst = min(worst, abs(row[j] - row[i]))
+    # Anti-vacuity, as this test's siblings already do with `crossings > 0`:
+    # `worst` starts at 1e9 and the assertion below is a lower bound, so with no
+    # shuffler ever sharing a lane it passes while proving nothing at all.
+    assert pairs > 0, (
+        f"factor={factor}: no shuffler ever shared a lane with anybody -- "
+        f"this test proves nothing")
     assert worst >= BODY_DEPTH - 1e-3, (
         f"factor={factor}: somebody got within {worst:.4f} m of a shuffler")
 

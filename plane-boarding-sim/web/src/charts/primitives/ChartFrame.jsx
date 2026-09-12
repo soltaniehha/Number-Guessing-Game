@@ -120,8 +120,8 @@ export function emptyCopy(kind, extra = null) {
       hint: 'Re-enable at least one strategy in the filter above to plot it.',
     },
     noSweep: {
-      title: 'No load-factor sweep in this batch',
-      hint: 'Enable “Sweep load factor” in the Scenario section and re-run. The sweep re-runs every selected strategy across a range of % full, which takes roughly as long as the batch × the number of load factors.',
+      title: 'No parameter sweep in this batch',
+      hint: 'Enable the sweep in the Scenario section, pick the parameter to vary, and re-run. A sweep re-runs every selected strategy at every point on that axis, so it costs roughly the batch × the number of points.',
     },
     noSeatMap: {
       title: 'No per-seat timings yet',

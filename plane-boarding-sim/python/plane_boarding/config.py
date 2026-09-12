@@ -90,9 +90,12 @@ def _numeric_weight_map(raw: Mapping[str, Any], name: str) -> Tuple[Tuple[int, .
         keys = sorted(int(k) for k in raw)
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"{name}: keys must be integers, got {list(raw)!r}") from exc
-    weights = [float(raw[str(k)]) if str(k) in raw else float(raw[k]) for k in keys]
     if not keys:
         raise ConfigError(f"{name}: must not be empty")
+    try:
+        weights = [float(raw[str(k)]) if str(k) in raw else float(raw[k]) for k in keys]
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{name}: weights must be numbers, got {list(raw.values())!r}") from exc
     if any(w < 0 for w in weights):
         raise ConfigError(f"{name}: weights must be non-negative")
     if sum(weights) <= 0:
@@ -103,7 +106,10 @@ def _numeric_weight_map(raw: Mapping[str, Any], name: str) -> Tuple[Tuple[int, .
 def _string_weight_map(raw: Mapping[str, Any], name: str) -> Tuple[Tuple[str, ...], Tuple[float, ...]]:
     """String-keyed weights keep JSON insertion order, which both languages preserve."""
     keys = tuple(str(k) for k in raw)
-    weights = tuple(float(raw[k]) for k in raw)
+    try:
+        weights = tuple(float(raw[k]) for k in raw)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{name}: weights must be numbers, got {list(raw.values())!r}") from exc
     if not keys:
         raise ConfigError(f"{name}: must not be empty")
     if sum(weights) <= 0:

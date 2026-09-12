@@ -79,7 +79,7 @@ dark. Follow the `dataviz` skill for palette and form.
 | 4 | **Aisle congestion heatmap** | Row × time matrix | Where do jams form, and when? |
 | 5 | **Time breakdown** | Stacked bar: walking / stowing / shuffling / blocked | *Why* is a strategy slow? |
 | 6 | **Seat interference counts** | Grouped bar by type (0 / 1 / 2 blockers) | Does outside-in really kill shuffles? |
-| 7 | **Load-factor sweep** | Line: boarding time vs the swept parameter, per strategy | Does the ranking hold on a half-empty flight — or as status concentrates forward, or preboarding grows? |
+| 7 | **Parameter sweep** | Line: boarding time vs the swept parameter, per strategy | Does the ranking hold on a half-empty flight — or as status concentrates forward, or preboarding grows? |
 | 8 | **Passenger wait time** | Box plot / violin of individual time-to-seat | Is the fast strategy also the pleasant one? |
 | 9 | **Time-to-seat by seat position** | Seat-map heatmap | Who suffers — window? rear? |
 | 10 | **Convergence** | Running mean ± CI vs replication count | Have we run enough replications to trust this? |

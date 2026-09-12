@@ -425,6 +425,7 @@ describe.each([0.0, 0.4, 0.6])('squeeze factor %s', (factor) => {
     const { state: states, x: xs } = replay.frames
 
     let worst = 1e9
+    let pairs = 0
     for (let f = 0; f < states.length; f++) {
       const st = states[f]
       const row = xs[f]
@@ -432,12 +433,17 @@ describe.each([0.0, 0.4, 0.6])('squeeze factor %s', (factor) => {
         if (st[i] !== SHUFFLING) continue
         for (let j = 0; j < st.length; j++) {
           if (j !== i && IN_AISLE.has(st[j]) && lanes[j] === lanes[i]) {
+            pairs += 1
             const gap = Math.abs(row[j] - row[i])
             if (gap < worst) worst = gap
           }
         }
       }
     }
+    // Anti-vacuity, as this test's siblings already do with `crossings > 0`:
+    // `worst` starts at 1e9 and the assertion below is a lower bound, so with no
+    // shuffler ever sharing a lane it passes while proving nothing at all.
+    expect(pairs, 'no shuffler ever shared a lane -- this test proves nothing').toBeGreaterThan(0)
     expect(worst).toBeGreaterThanOrEqual(BODY_DEPTH - 1e-3)
     expect(orderFlips(states, xs, lanes, true)).toEqual([])
   })

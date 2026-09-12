@@ -12,6 +12,9 @@ import { useSeries, legendItems } from './selectors.js'
 
 const BAND_LIMIT = 4
 
+/** "1 replication" / "12 replications" — the x axis counts whole runs. */
+const replications = (n) => `${n} replication${n === 1 ? '' : 's'}`
+
 /**
  * `left` has to clear BOTH the m:ss tick labels — which end 8px off the plot
  * and run about 34px wide — and the rotated axis title sitting outboard of
@@ -65,7 +68,7 @@ export function Convergence({ batch, hidden, height = 300 }) {
   const ariaLabel = empty
     ? 'Convergence — no replications yet.'
     : `Running mean boarding time against replication count for ${model.rows.length} strategies, up to ` +
-      `${model.maxN} replications. ${settled} of ${model.rows.length} have a 95% interval narrower than 2% of the mean, ` +
+      `${replications(model.maxN)}. ${settled} of ${model.rows.length} have a 95% interval narrower than 2% of the mean, ` +
       'which is the point where the ranking stops moving.'
 
   const table = model
@@ -96,7 +99,7 @@ export function Convergence({ batch, hidden, height = 300 }) {
   return (
     <ChartFrame
       title="Convergence"
-      subtitle={empty ? 'waiting for replications' : `running mean ± 95% · up to ${model.maxN} replications`}
+      subtitle={empty ? 'waiting for replications' : `running mean ± 95% · up to ${replications(model.maxN)}`}
       ariaLabel={ariaLabel}
       height={height}
       margin={MARGIN}
@@ -118,7 +121,18 @@ export function Convergence({ batch, hidden, height = 300 }) {
         const x = linearScale({ domain: [1, Math.max(2, model.maxN)], range: [0, innerWidth] })
         const y = linearScale({ domain: model.yDomain, range: [innerHeight, 0] })
         const yTicks = y.ticks(5)
-        const xTicks = x.ticks(innerWidth < 340 ? 3 : 5).filter((v) => v >= 1)
+        // Replication count is a whole number, so the ticks are too: a
+        // fractional "nice" tick rounds to a duplicate label ("1 2 2" at n=1).
+        const wanted = innerWidth < 340 ? 3 : 5
+        const xTicks =
+          model.maxN <= 10
+            ? (() => {
+                const step = Math.max(1, Math.ceil(model.maxN / wanted))
+                const out = []
+                for (let v = 1; v <= model.maxN; v += step) out.push(v)
+                return out
+              })()
+            : [...new Set(x.ticks(wanted).filter((v) => v >= 1 && Number.isInteger(v)))]
 
         return (
           <>

@@ -7,7 +7,7 @@ import pytest
 from plane_boarding.engine import simulate
 from plane_boarding.passengers import generate
 from plane_boarding.rng import PCG32
-from plane_boarding.strategies import STRATEGIES
+from plane_boarding.strategies import STRATEGIES, weibull_mean_factor
 
 from helpers import clean_cfg, cfg_for, make_queue
 
@@ -473,6 +473,40 @@ def test_the_compliance_bernoulli_is_consumed_even_at_zero_jitter():
     assert order(nonComplianceRate=0.0, lateRate=0.30) != \
         order(nonComplianceRate=0.15, lateRate=0.30), (
         "the compliance Bernoulli was not consumed, so the late draw shifted")
+
+
+#: Gamma(1 + 1/shape) at nine shapes spanning the slider, pinned so a drift in
+#: either language's `log`/`exp` shows up here rather than as a silent parity
+#: break. `web/test/sim/strategies.test.js` pins the identical table.
+WEIBULL_MEAN_FACTORS = {
+    1.0: 1.0, 1.05: 0.980793, 1.5: 0.902745, 1.7: 0.892245, 2.0: 0.886227,
+    2.5: 0.887264, 3.0: 0.89298, 3.3: 0.897015, 3.5: 0.899747,
+}
+
+
+def test_the_weibull_mean_factor_tracks_the_configured_shape():
+    """`strat_slowest_first` used to hard-code 0.8929795 for this. Two things
+    were wrong with that: it silently stopped meaning anything as soon as
+    anybody moved the `stowWeibullShape` slider, and it was not even the right
+    number for the shipped shape -- Gamma(1 + 1/1.7) is 0.892245."""
+    import math
+    for shape, expected in WEIBULL_MEAN_FACTORS.items():
+        got = weibull_mean_factor(shape)
+        assert got == expected, f"shape {shape}: {got} != {expected}"
+        # ...and the series really is Gamma, not a fitted curve.
+        assert abs(got - math.gamma(1.0 + 1.0 / shape)) < 1e-6, shape
+    assert weibull_mean_factor(1.7) != 0.8929795, (
+        "the old hard-coded constant was wrong by 8e-4; do not restore it")
+
+
+def test_slowest_first_responds_to_the_stow_shape():
+    """The regression the hard-coded constant hid: change the shape, and the
+    ordering the strategy produces must change with it."""
+    a = [p.id for p in make_queue(clean_cfg("a320neo", "slowest_first", seed=4,
+                                            stowWeibullShape=1.2))[1]]
+    b = [p.id for p in make_queue(clean_cfg("a320neo", "slowest_first", seed=4,
+                                            stowWeibullShape=3.4))[1]]
+    assert a != b, "the shape no longer reaches the service-time estimate"
 
 
 def test_unknown_strategy_is_rejected_clearly():

@@ -99,11 +99,19 @@ def assign_seats(
     for group in by_block.values():
         group.sort(key=lambda s: s.layoutPos)
 
+    # Both scans below skip already-taken seats and `taken` only ever goes
+    # False -> True, so a cursor past the taken prefix of `pool` is exactly
+    # equivalent to rescanning from zero -- and turns the party loop from
+    # quadratic into linear in the common case. `web/src/sim/passengers.js`
+    # carries the identical cursor; the two files are meant to read side by side.
+    pool_start = 0
     out: List[List[Seat]] = []
     for k in party_sizes:
+        while pool_start < len(pool) and taken[pool[pool_start].index]:
+            pool_start += 1
         chosen: Optional[List[Seat]] = None
         if k > 1:
-            for s in pool:
+            for s in pool[pool_start:]:
                 if taken[s.index]:
                     continue
                 block = by_block[(s.rowSlot, s.blockId)]
@@ -113,7 +121,7 @@ def assign_seats(
                     break
         if chosen is None:
             chosen = []
-            for s in pool:
+            for s in pool[pool_start:]:
                 if not taken[s.index]:
                     chosen.append(s)
                     if len(chosen) == k:

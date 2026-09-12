@@ -9,7 +9,7 @@ import { SeatedCurve } from '../../src/charts/SeatedCurve.jsx'
 import { CongestionHeatmap } from '../../src/charts/CongestionHeatmap.jsx'
 import { TimeBreakdown } from '../../src/charts/TimeBreakdown.jsx'
 import { InterferenceCounts } from '../../src/charts/InterferenceCounts.jsx'
-import { LoadFactorSweep } from '../../src/charts/LoadFactorSweep.jsx'
+import { ParameterSweep } from '../../src/charts/ParameterSweep.jsx'
 import { WaitTimeBoxes } from '../../src/charts/WaitTimeBoxes.jsx'
 import { SeatPositionHeatmap } from '../../src/charts/SeatPositionHeatmap.jsx'
 import { Convergence } from '../../src/charts/Convergence.jsx'
@@ -25,7 +25,7 @@ const CHARTS = [
   ['CongestionHeatmap', CongestionHeatmap],
   ['TimeBreakdown', TimeBreakdown],
   ['InterferenceCounts', InterferenceCounts],
-  ['LoadFactorSweep', LoadFactorSweep],
+  ['ParameterSweep', ParameterSweep],
   ['WaitTimeBoxes', WaitTimeBoxes],
   ['SeatPositionHeatmap', SeatPositionHeatmap],
   ['Convergence', Convergence],

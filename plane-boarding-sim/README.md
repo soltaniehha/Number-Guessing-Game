@@ -5,12 +5,12 @@ airline industry's boarding schemes come out like this:
 
 | | strategy | mean | vs free-for-all |
 |---|---|---|---|
-| 1 | Steffen (perfect) | 13:53 | **−15.1%** |
-| 8= | Southwest 2026 (the real one) | 16:09 | −1.3%, *not significant* |
-| 8= | **Random free-for-all** | **16:21** | — |
-| 11 | 5-tier priority (Delta/American/Air France) | 17:14 | **+5.4%** |
-| 12= | Back-to-front zones | 18:50 | +15.1% |
-| 15= | Front-to-back zones | 23:57 | +46.4% |
+| 1 | Steffen (perfect) | 13:53 | **−15.2%** |
+| 8= | Southwest 2026 (the real one) | 16:10 | −1.3%, *not significant* |
+| 8= | **Random free-for-all** | **16:23** | — |
+| 11 | 5-tier priority (Delta/American/Air France) | 17:16 | **+5.4%** |
+| 12= | Back-to-front zones | 18:52 | +15.2% |
+| 15= | Front-to-back zones | 24:03 | +46.8% |
 
 Four things in that table are worth the trouble of a simulator:
 
@@ -34,7 +34,7 @@ Four things in that table are worth the trouble of a simulator:
   1.3% with an interval that spans zero. That is not a criticism of Southwest.
   It is the price of the commercial constraint, measured.
 - **On a twin-aisle 777, Steffen's famous advantage collapses to nothing** —
-  +0:10 against random, interval spanning zero, while reverse pyramid quietly
+  +0:11 against random, interval spanning zero, while reverse pyramid quietly
   wins. With enough aisles, congestion stops being the binding constraint, and
   clever sequencing was only ever fixing congestion.
 
@@ -89,22 +89,22 @@ Roughly 70 seconds.
 ======================================================================================================================
    #  strategy                mean  +/-95%    p95  vs rnd  paired vs random (95% CI) far-1st  relative time
 ----------------------------------------------------------------------------------------------------------------------
-   1  steffen_perfect        13:53    21.1  16:07   0.849  -2:28 [-2:53,-2:04]         +0.02  ██████████░░░░░░░░
-  =2  steffen_modified       15:01    20.8  17:11   0.919  -1:20 [-1:41,-0:59]         -0.00  ███████████░░░░░░░
-  =2  slowest_first          15:05    24.8  17:03   0.922  -1:16 [-1:37,-0:55]         +0.01  ███████████░░░░░░░
-  =2  wilma                  15:09    26.9  17:04   0.926  -1:12 [-1:38,-0:46]         -0.00  ███████████░░░░░░░
-  =2  wilma_zoned            15:18    23.9  17:20   0.935  -1:04 [-1:25,-0:42]         +0.17  ███████████░░░░░░░
-  =2  reverse_pyramid        15:21    22.8  17:05   0.938  -1:01 [-1:25,-0:37]         +0.18  ████████████░░░░░░
-   7  common_sense_5tier     15:32    25.3  17:38   0.950  -0:49 [-1:16,-0:22]         +0.09  ████████████░░░░░░
-  =8  southwest_2026         16:09    34.1  18:53   0.987  -0:13 [-0:50,+0:24]  ns     +0.15  ████████████░░░░░░
-  =8  random                 16:21    24.0  18:20   1.000  (baseline)                  +0.00  ████████████░░░░░░
-  10  by_bags                16:47    22.8  18:52   1.026  +0:25 [+0:01,+0:49]         -0.01  █████████████░░░░░
-  11  priority_5tier         17:14    27.5  19:49   1.054  +0:53 [+0:30,+1:15]         -0.17  █████████████░░░░░
- =12  rotating_zone          18:47    25.7  21:22   1.148  +2:25 [+2:00,+2:51]         +0.15  ██████████████░░░░
- =12  back_to_front          18:50    36.3  21:32   1.151  +2:28 [+1:59,+2:57]         +0.34  ██████████████░░░░
- =12  block_boarding         18:50    36.3  21:32   1.151  +2:28 [+1:59,+2:57]         +0.34  ██████████████░░░░
- =15  open_seating           23:21    44.5  27:56   1.428  +7:00 [+6:16,+7:44]         +0.21  ██████████████████
- =15  front_to_back          23:57    38.6  26:33   1.464  +7:36 [+6:57,+8:15]         -0.35  ██████████████████
+   1  steffen_perfect        13:53    21.0  16:07   0.848  -2:30 [-2:54,-2:05]         +0.02  ██████████░░░░░░░░
+  =2  steffen_modified       15:03    20.8  17:13   0.918  -1:20 [-1:41,-1:00]         -0.00  ███████████░░░░░░░
+  =2  slowest_first          15:05    24.7  17:05   0.921  -1:17 [-1:38,-0:57]         +0.01  ███████████░░░░░░░
+  =2  wilma                  15:12    26.9  17:12   0.928  -1:11 [-1:37,-0:45]         -0.00  ███████████░░░░░░░
+  =2  wilma_zoned            15:19    23.8  17:20   0.935  -1:04 [-1:25,-0:43]         +0.17  ███████████░░░░░░░
+  =2  reverse_pyramid        15:21    23.1  17:06   0.937  -1:02 [-1:26,-0:37]         +0.18  ███████████░░░░░░░
+   7  common_sense_5tier     15:34    25.7  17:48   0.950  -0:49 [-1:16,-0:23]         +0.09  ████████████░░░░░░
+  =8  southwest_2026         16:10    33.9  18:54   0.987  -0:13 [-0:50,+0:23]  ns     +0.15  ████████████░░░░░░
+  =8  random                 16:23    23.8  18:23   1.000  (baseline)                  +0.00  ████████████░░░░░░
+  10  by_bags                16:50    22.8  18:52   1.027  +0:27 [+0:03,+0:51]         -0.01  █████████████░░░░░
+  11  priority_5tier         17:16    27.3  19:52   1.054  +0:53 [+0:30,+1:15]         -0.17  █████████████░░░░░
+ =12  rotating_zone          18:48    25.8  21:32   1.148  +2:25 [+2:01,+2:50]         +0.15  ██████████████░░░░
+ =12  back_to_front          18:52    36.4  21:31   1.152  +2:29 [+2:01,+2:58]         +0.34  ██████████████░░░░
+ =12  block_boarding         18:52    36.4  21:31   1.152  +2:29 [+2:01,+2:58]         +0.34  ██████████████░░░░
+ =15  open_seating           23:37    43.1  28:01   1.441  +7:14 [+6:30,+7:57]         +0.21  ██████████████████
+ =15  front_to_back          24:03    38.8  26:35   1.468  +7:40 [+7:00,+8:19]         -0.35  ██████████████████
 ----------------------------------------------------------------------------------------------------------------------
  'mean +/-95%' is the MARGINAL interval: how long this strategy actually takes, on its own.
  'paired vs random' is the per-replication difference on matched seeds. Every strategy
@@ -113,7 +113,10 @@ Roughly 70 seconds.
    either way -- and usually the tighter one. 'ns' = interval contains zero. RANKS USE THIS.
  '=' marks a SHARED rank: the paired test cannot separate those strategies at this many
    replications. Treat them as equal, not as ordered.
- best: Steffen (perfect)  —  2:28 faster than free-for-all (15.1%)
+ NOTE: the marginal view would call 2 more of these a tie. The two disagreeing is
+   the point, not a fault: pairing is the more powerful test, so differences can be real
+   even where the absolute-time intervals overlap.
+ best: Steffen (perfect)  —  2:30 faster than free-for-all (15.2%)
  seat interference (mean events/run):  steffen_perfect=21   steffen_modified=22   slowest_first=34   wilma=20
 ======================================================================================================================
 ```
@@ -149,8 +152,8 @@ who flies it and where the claim comes from.
 | `rotating_zone` | Alternates rearmost and foremost bands so the two flows interleave. | 1.15 |
 | `back_to_front` | Contiguous bands, rearmost first. Intuitive, reliably poor. | 1.15 |
 | `block_boarding` | Premium cabin, then rear-to-front blocks. The pre-status-tier standard. | 1.15 |
-| `open_seating` | No assigned seats; pick one on entering. Southwest, 1971–2026. Retired, and slow here because everyone hunts. | 1.43 |
-| `front_to_back` | Foremost band first. The pathological control: everyone walks past everyone. | 1.46 |
+| `open_seating` | No assigned seats; pick one on entering. Southwest, 1971–2026. Retired, and slow here because everyone hunts. | 1.44 |
+| `front_to_back` | Foremost band first. The pathological control: everyone walks past everyone. | 1.47 |
 
 Four things are applied on top of whatever a strategy returns, in this order:
 preboards to the front, party cohesion (a booking boards whole, at its
@@ -278,10 +281,10 @@ make parity
 
 runs 17 RNG conformance vectors and 15 fixture scenarios through both engines
 and diffs a canonical digest of each: total seconds, passenger and seat counts,
-doors used, the walk/stow/shuffle/blocked breakdown, the interference
-histogram, gate checks, bin searches, aisle-block episodes, the seated curve
-resampled onto a fixed 10 s grid, and the first twenty sit times. Floats are
-compared to 1e-6. The fixtures cover every airframe, both door topologies, an
+doors used, a hash of the resolved cabin geometry, the walk/stow/shuffle/blocked
+breakdown, the interference histogram, gate checks, bin searches, aisle-block
+episodes, the seated curve resampled onto a fixed 10 s grid, and the first
+twenty sit times. Floats are compared to 1e-6. The fixtures cover every airframe, both door topologies, an
 empty cabin, a full one, open seating, and Schultz's own configuration pinned
 explicitly so it cannot drift when a shipped default moves.
 
@@ -339,18 +342,18 @@ $ make sweep
   5-tier priority (revenue)
     eliteForw   pax    mean  s/pax
         0.000   171   16:38   5.83  █████████████████████████████░
-        0.250   171   16:24   5.75  ████████████████████████████░░
-        0.500   171   16:38   5.83  █████████████████████████████░
-        0.750   171   17:11   6.03  ██████████████████████████████
+        0.250   171   16:27   5.77  ████████████████████████████░░
+        0.500   171   16:39   5.84  █████████████████████████████░
+        0.750   171   17:14   6.05  ██████████████████████████████
         1.000   171   17:22   6.09  ██████████████████████████████
 
   Random / free-for-all
     eliteForw   pax    mean  s/pax
-        0.000   171   16:12   5.68  ████████████████████████████░░
-        0.250   171   16:12   5.68  ████████████████████████████░░
-        0.500   171   16:12   5.68  ████████████████████████████░░
-        0.750   171   16:12   5.68  ████████████████████████████░░
-        1.000   171   16:12   5.68  ████████████████████████████░░
+        0.000   171   16:14   5.70  ████████████████████████████░░
+        0.250   171   16:14   5.70  ████████████████████████████░░
+        0.500   171   16:14   5.70  ████████████████████████████░░
+        0.750   171   16:14   5.70  ████████████████████████████░░
+        1.000   171   16:14   5.70  ████████████████████████████░░
 ```
 
 Priority boarding costs 44 seconds as status concentrates forward; the

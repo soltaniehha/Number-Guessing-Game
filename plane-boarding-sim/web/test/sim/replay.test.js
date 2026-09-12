@@ -8,7 +8,7 @@ import { QUEUED, SEATED, WALKING } from '../../src/sim/config.js'
 import { run } from '../../src/sim/engine.js'
 import '../../src/sim/replay.js'
 import { AIRCRAFT, DEFAULTS, STRATEGIES, resolveAircraft, runReplay, runSimulation } from '../../src/sim/index.js'
-import { cfgFor } from './helpers.js'
+import { ALL_AIRCRAFT, cfgFor } from './helpers.js'
 
 const cfg = cfgFor('a220_300', 'common_sense_5tier', 6, { loadFactor: 0.8 })
 const { result, replay } = run(cfg, null, true, 0.25)
@@ -32,7 +32,13 @@ describe('the replay document', () => {
     expect(replay.strategy).toBe(cfg.strategy)
     expect(replay.seed).toBe(cfg.seed)
     expect(replay.frameInterval).toBe(0.25)
-    expect(replay.duration).toBe(result.totalSeconds)
+    // `duration` is the SPAN OF THE FRAME BUFFER, not the boarding time: the run
+    // ends mid-interval and the terminal frame sits at the next grid point. It
+    // must be >= totalSeconds and within one frame interval of it, so a scrubber
+    // driven by it can actually reach the last frame.
+    expect(replay.duration).toBeGreaterThanOrEqual(result.totalSeconds)
+    expect(replay.duration - result.totalSeconds).toBeLessThan(replay.frameInterval + 1e-9)
+    expect(replay.duration).toBeCloseTo(replay.frameInterval * (replay.frameCount - 1), 9)
   })
 
   it('has rectangular frame arrays indexed by passenger', () => {
@@ -65,6 +71,8 @@ describe('the replay document', () => {
         'id',
         'lane',
         'party',
+        'partyId',
+        'partySize',
         'seatDepth',
         'seatLetter',
         'seatRow',
@@ -152,7 +160,8 @@ describe('the public interface src/lib/engineBridge.js expects', () => {
     const plain = runSimulation(appConfig)
     const rep = runReplay(appConfig)
     expect(rep.result.totalSeconds).toBe(plain.totalSeconds)
-    expect(rep.duration).toBe(plain.totalSeconds)
+    expect(rep.duration).toBeGreaterThanOrEqual(plain.totalSeconds)
+    expect(rep.duration - plain.totalSeconds).toBeLessThan(rep.frameInterval + 1e-9)
     expect(rep.dt).toBe(rep.frameInterval)
   })
 
@@ -168,4 +177,42 @@ describe('the public interface src/lib/engineBridge.js expects', () => {
     expect(Object.keys(r.timeBreakdown).sort()).toEqual(['blocked', 'shuffle', 'stow', 'walk'])
     expect(Object.keys(r.interference).sort()).toEqual(['none', 'one', 'sameParty', 'two'])
   })
+})
+
+describe.each(ALL_AIRCRAFT)('%s', (aid) => {
+  it('makes the last reachable frame agree with the result', () => {
+    // The frame buffer and the RunResult must not contradict each other. They
+    // did: `duration` was `totalSeconds`, which lands one grid step short of the
+    // terminal frame, so on a220_300, b777_300er and b787_9 the far right of the
+    // timeline showed a passenger still shuffling while the status bar said all
+    // N were seated.
+    const { result, replay } = run(cfgFor(aid, 'random', 1), null, true, 0.25)
+    expect(result.completed).toBe(true)
+    const closing = replay.frames.state[replay.frames.state.length - 1]
+    expect([...closing].every((s) => s === SEATED), `${aid}: closing frame not terminal`).toBe(
+      true,
+    )
+    // What the renderer does: index = clamp(floor(t / frameInterval), 0, last).
+    const last = replay.frameCount - 1
+    const idx = Math.min(last, Math.floor(replay.duration / replay.frameInterval + 1e-9))
+    expect(idx, `${aid}: terminal frame unreachable`).toBe(last)
+  })
+})
+
+it('does not conflate the party id with the party size', () => {
+  // They were conflated: the payload emitted the party INDEX under the name
+  // `party`, and the cabin renderer prints that as a size -- so a tooltip read
+  // "44 together" on an aircraft whose party sizes stop at 5.
+  const cfg = cfgFor('a220_300', 'common_sense_5tier', 6, { loadFactor: 0.8 })
+  const { replay } = run(cfg, null, true, 0.25)
+  const biggest = Math.max(...cfg.partyKeys)
+  const counts = new Map()
+  for (const p of replay.passengers) counts.set(p.partyId, (counts.get(p.partyId) || 0) + 1)
+  for (const p of replay.passengers) {
+    expect(p.partySize).toBeGreaterThanOrEqual(1)
+    expect(p.partySize).toBeLessThanOrEqual(biggest)
+    expect(p.partySize).toBe(counts.get(p.partyId))
+    expect(p.party).toBe(p.partySize)
+  }
+  expect(Math.max(...replay.passengers.map((p) => p.partyId))).toBeGreaterThan(biggest)
 })

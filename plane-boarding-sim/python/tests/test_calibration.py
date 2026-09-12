@@ -93,10 +93,12 @@ def test_schultz_reference_configuration_is_stable():
 
 
 def test_partial_blocking_mechanism_does_what_it_claims():
-    """`stowPassSpeedFactor` is off by default but must stay working, because
-    it is the one lever that closes the absolute-time gap and someone will
-    reach for it. Faster squeeze => faster boarding, monotonically; and the
-    default of 0 must reproduce strict blocking exactly."""
+    """`stowPassSpeedFactor` SHIPS AT 0.40 -- see RESEARCH_PARAMETERS 12.3 for
+    why that value and what it costs. It is the one lever that closes the
+    absolute-time gap, so it must stay working: faster squeeze => faster
+    boarding, monotonically, and setting it to 0 must reproduce strict blocking
+    exactly. (This docstring used to claim the default was off, which the last
+    assertion in the body has always contradicted.)"""
     strict = run_batch(a320_at_180(doors=["1L"], stowPassSpeedFactor=0.0), runs=12)
     slow = run_batch(a320_at_180(doors=["1L"], stowPassSpeedFactor=0.25), runs=12)
     quick = run_batch(a320_at_180(doors=["1L"], stowPassSpeedFactor=0.60), runs=12)

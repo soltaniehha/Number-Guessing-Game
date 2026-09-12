@@ -112,12 +112,11 @@ export const CONTROLS = [
     section: 'scenario',
     shell: true,
     modes: SWEEP_MODES,
-    // Named for the chart it fills, which titles itself "Load-factor sweep"
-    // and, in its empty state, sends the reader to the Scenario section to
-    // switch this on. Load factor is the default axis; the picker below
-    // changes it.
-    label: 'Load-factor sweep',
-    explain: 'Also re-run every strategy across a range of one scenario parameter — load factor unless you change the axis below — to fill the sweep chart. It multiplies the work, so it is off by default.',
+    // Named for the chart it fills, which titles itself "Parameter sweep" and,
+    // in its empty state, sends the reader to the Scenario section to switch
+    // this on and pick an axis. Keep the two in step.
+    label: 'Parameter sweep',
+    explain: 'Also re-run every strategy across a range of one scenario parameter — load factor unless you change the axis below — to fill the parameter-sweep chart. It multiplies the work, so it is off by default.',
   },
   {
     key: 'sweepParam',
