@@ -74,6 +74,7 @@
     "MIN_SPEED_FRACTION": 0.15,
     "INCH": 0.0254,
     "MAX_SIM_SECONDS": 7200,
+    "MAX_DT": 1.0,
     "PAX_STREAM": 1,
     "ORDER_STREAM": 2,
     "DOOR_STREAM_BASE": 10,

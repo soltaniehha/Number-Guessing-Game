@@ -51,6 +51,12 @@ MIN_SPEED_FRACTION: float = CONSTANTS["MIN_SPEED_FRACTION"]
 INCH: float = CONSTANTS["INCH"]
 MAX_SIM_SECONDS: float = CONSTANTS["MAX_SIM_SECONDS"]
 
+#: Largest accepted time step. Twice the control panel's own maximum, so every
+#: reachable UI setting is legal and `dt: 1e6` -- which used to report a 00:00
+#: boarding, every passenger having arrived, stowed and sat inside one step --
+#: is not.
+MAX_DT: float = CONSTANTS["MAX_DT"]
+
 #: PCG32 stream layout (ENGINE_SPEC 1.3). Loaded rather than hard-coded so the
 #: two engines cannot drift on a stream index.
 PAX_STREAM: int = int(CONSTANTS["PAX_STREAM"])
@@ -219,6 +225,17 @@ class SimConfig:
             )
         if self.dt <= 0:
             raise ConfigError(f"dt must be positive, got {self.dt}")
+        if self.dt > MAX_DT:
+            # `dt: 1e6` used to be accepted and reported a 00:00 boarding: every
+            # passenger arrived, stowed and sat inside a single step, so the
+            # simulation never simulated anything. The cap is generous -- twice
+            # the control panel's own maximum -- and exists to make that a
+            # rejected scenario rather than a silently wrong answer.
+            raise ConfigError(
+                f"dt must be at most {MAX_DT} s -- above that a single step spans "
+                f"more than the whole aisle-interaction process and the run "
+                f"degenerates, got {self.dt}"
+            )
         if self.sampleInterval <= 0:
             raise ConfigError(f"sampleInterval must be positive, got {self.sampleInterval}")
         if self.zoneCount < 1:
@@ -227,6 +244,42 @@ class SimConfig:
             raise ConfigError(f"walkSpeedMean must be positive, got {self.walkSpeedMean}")
         if self.walkSpeedSd < 0:
             raise ConfigError(f"walkSpeedSd must be non-negative, got {self.walkSpeedSd}")
+        # The service-time model. A negative scale used to be accepted and made
+        # boarding FASTER -- a negative Weibull draw subtracted from the stow
+        # clock -- which is the worst kind of invalid input: plausible-looking
+        # output from a physically meaningless scenario.
+        if self.stowWeibullShape <= 0:
+            raise ConfigError(
+                f"stowWeibullShape must be positive, got {self.stowWeibullShape}")
+        if self.stowWeibullScale < 0:
+            raise ConfigError(
+                f"stowWeibullScale must be non-negative -- it is a duration in "
+                f"seconds, got {self.stowWeibullScale}")
+        if self.stowVariability < 0:
+            raise ConfigError(
+                f"stowVariability must be non-negative -- it is a standard "
+                f"deviation, got {self.stowVariability}")
+        if self.shuffleMoveMin < 0:
+            raise ConfigError(
+                f"shuffleMoveMin must be non-negative -- movement times are "
+                f"durations in seconds, got {self.shuffleMoveMin}")
+        if self.slowSpeedFactor <= 0:
+            # Zero would give a slow passenger a walk speed of zero, i.e. a
+            # passenger who never reaches their seat: a deadlock, not a scenario.
+            raise ConfigError(
+                f"slowSpeedFactor must be positive -- it multiplies walk speed, "
+                f"got {self.slowSpeedFactor}")
+        if self.slowStowFactor < 0:
+            raise ConfigError(
+                f"slowStowFactor must be non-negative, got {self.slowStowFactor}")
+        for name in ("binSearchPenalty", "gateCheckPenalty", "binCongestionWeight"):
+            v = getattr(self, name)
+            if v < 0:
+                raise ConfigError(f"{name} must be non-negative, got {v}")
+        if self.shuffleSamePartyMovements < 0:
+            raise ConfigError(
+                f"shuffleSamePartyMovements must be non-negative, got "
+                f"{self.shuffleSamePartyMovements}")
         if not (self.shuffleMoveMin <= self.shuffleMoveMode <= self.shuffleMoveMax):
             raise ConfigError(
                 "shuffle movement triangular must satisfy min <= mode <= max, got "

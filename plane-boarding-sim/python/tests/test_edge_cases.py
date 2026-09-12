@@ -95,6 +95,45 @@ def test_unknown_aircraft_is_rejected():
         g("concorde")
 
 
+#: Physically meaningless parameter values that the validators used to accept.
+#: The two that were reported both produced plausible-looking output rather than
+#: an obvious failure, which is what makes them worth rejecting: a negative stow
+#: scale made boarding FASTER (a negative Weibull draw subtracts from the stow
+#: clock) and `dt: 1e6` reported a 00:00 boarding because every passenger
+#: arrived, stowed and sat inside one step.
+NONSENSE_CONFIGS = [
+    ("stowWeibullScale", -10.0), ("stowWeibullScale", -0.001),
+    ("stowWeibullShape", 0.0), ("stowWeibullShape", -1.7),
+    ("stowVariability", -0.1),
+    ("dt", 1e6), ("dt", 1.001), ("dt", 0.0), ("dt", -0.1),
+    ("slowSpeedFactor", 0.0), ("slowSpeedFactor", -0.5),
+    ("slowStowFactor", -1.0),
+    ("shuffleMoveMin", -1.0),
+    ("binSearchPenalty", -1.0), ("gateCheckPenalty", -1.0),
+    ("binCongestionWeight", -0.5),
+    ("shuffleSamePartyMovements", -1),
+    ("walkSpeedMean", 0.0), ("walkSpeedSd", -1.0),
+    ("doorArrivalMean", -1.0), ("binSearchRadius", -1),
+]
+
+
+@pytest.mark.parametrize("key,value", NONSENSE_CONFIGS)
+def test_physically_meaningless_parameters_are_rejected(key, value):
+    with pytest.raises(ConfigError, match=key.split("[")[0]):
+        cfg_for("a320neo", "random", seed=1, **{key: value})
+
+
+def test_the_shipped_control_ranges_all_remain_legal():
+    """The validators must reject nonsense without rejecting anything a user can
+    actually reach by dragging a slider to its stop."""
+    for key, value in [("dt", 0.5), ("dt", 0.01), ("stowWeibullShape", 1.0),
+                       ("stowWeibullShape", 3.5), ("stowWeibullScale", 6.0),
+                       ("stowWeibullScale", 34.0), ("stowPassSpeedFactor", 0.0),
+                       ("stowPassSpeedFactor", 1.0), ("slowSpeedFactor", 0.55),
+                       ("stowVariability", 0.0), ("binCongestionWeight", 0.0)]:
+        cfg_for("a320neo", "random", seed=1, **{key: value})
+
+
 def test_invalid_door_assignment_is_rejected():
     with pytest.raises(ConfigError, match="doorAssignment"):
         cfg_for("a320neo", "random", seed=1, doorAssignment="teleporter")

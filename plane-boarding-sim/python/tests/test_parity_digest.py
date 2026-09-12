@@ -60,10 +60,11 @@ def test_fixture_set_covers_every_aircraft_and_the_awkward_corners(fixtures):
 def test_digest_has_the_contracted_fields_and_types(emit, fixtures):
     d = emit.digest_for(fixtures[0])
     assert set(d) == {
-        "config_hash", "totalSeconds", "paxCount", "seatCount", "doors",
-        "timeBreakdown", "interference", "gateChecks", "binSearches",
+        "config_hash", "geometry_hash", "totalSeconds", "paxCount", "seatCount",
+        "doors", "timeBreakdown", "interference", "gateChecks", "binSearches",
         "aisleBlockEvents", "seatedCurve", "first20SitTimes"}
     assert isinstance(d["config_hash"], str) and len(d["config_hash"]) == 8
+    assert isinstance(d["geometry_hash"], str) and len(d["geometry_hash"]) == 8
     assert set(d["timeBreakdown"]) == {"walk", "stow", "shuffle", "blocked"}
     assert set(d["interference"]) == {"none", "one", "two", "sameParty"}
     assert all(isinstance(v, int) for v in d["interference"].values())
@@ -132,3 +133,48 @@ def test_empty_cabin_fixture_degrades_gracefully(emit, fixtures):
     assert d["totalSeconds"] == 0.0
     assert d["first20SitTimes"] == []
     assert sum(d["interference"].values()) == 0
+
+
+def test_geometry_hash_covers_the_resolved_geometry(emit, fixtures):
+    """The digest used to stop at the cabin door: nothing in it depended on
+    `geometry_payload`, so a rounding disagreement there could ship undetected.
+
+    It is a HASH rather than a list of numbers on purpose. `parity/compare.py`
+    compares numerically with a 1e-6 tolerance, and the disagreement being
+    looked for -- `round(x, 6)` against a hand-rolled `Math.round(v*1e6)/1e6` at
+    a tie -- is exactly 1e-6 wide, so only an exact string comparison can see it.
+    """
+    from plane_boarding.aircraft import aircraft_ids, get_aircraft
+    by_aircraft = {}
+    for f in fixtures:
+        d = emit.digest_for(f)
+        aid = f["config"]["aircraftId"]
+        # Same aircraft, same hash, whatever the scenario around it.
+        assert by_aircraft.setdefault(aid, d["geometry_hash"]) == d["geometry_hash"]
+    assert set(by_aircraft) == set(aircraft_ids()), "every airframe must be hashed"
+    # Different aircraft, different hash -- otherwise it is not covering anything.
+    assert len(set(by_aircraft.values())) == len(by_aircraft)
+
+    # And it must actually be sensitive to a 6-dp change in a coordinate, which
+    # is the failure mode it exists for.
+    ac = get_aircraft("a320neo")
+    before = emit.geometry_fingerprint(ac)
+    seat = ac.seats[0]
+    original = seat.x
+    try:
+        object.__setattr__(seat, "x", original + 1e-6)
+        assert emit.geometry_fingerprint(ac) != before
+    finally:
+        object.__setattr__(seat, "x", original)
+    assert emit.geometry_fingerprint(ac) == before
+
+
+def test_geometry_fingerprint_formats_floats_language_neutrally(emit):
+    """`%.6f` on both sides, with -0.0 normalised: Python prints an integral
+    float as `1.0` and JavaScript prints it as `1`, so the fingerprint must not
+    go anywhere near either language's own float repr."""
+    assert emit.f6(0.0) == "0.000000"
+    assert emit.f6(-0.0) == "0.000000"
+    assert emit.f6(1.0) == "1.000000"
+    assert emit.f6(12.3456785) == "12.345678" or emit.f6(12.3456785) == "12.345679"
+    assert emit.f6(round(0.0000005, 6)) == "0.000000"

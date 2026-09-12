@@ -94,6 +94,7 @@ describe('digestFor', () => {
       'doors',
       'first20SitTimes',
       'gateChecks',
+      'geometry_hash',
       'interference',
       'paxCount',
       'seatCount',
@@ -102,6 +103,7 @@ describe('digestFor', () => {
       'totalSeconds',
     ])
     expect(d.config_hash).toMatch(/^[0-9a-f]{8}$/)
+    expect(d.geometry_hash).toMatch(/^[0-9a-f]{8}$/)
     expect(Number.isInteger(d.paxCount)).toBe(true)
     expect(Number.isInteger(d.seatCount)).toBe(true)
     expect(Object.keys(d.timeBreakdown)).toEqual(['blocked', 'shuffle', 'stow', 'walk'])

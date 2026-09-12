@@ -38,6 +38,14 @@ export const MIN_SPEED_FRACTION = CONSTANTS.MIN_SPEED_FRACTION
 export const INCH = CONSTANTS.INCH
 export const MAX_SIM_SECONDS = CONSTANTS.MAX_SIM_SECONDS
 
+/**
+ * Largest accepted time step. Twice the control panel's own maximum, so every
+ * reachable UI setting is legal and `dt: 1e6` -- which used to report a 00:00
+ * boarding, every passenger having arrived, stowed and sat inside one step --
+ * is not.
+ */
+export const MAX_DT = CONSTANTS.MAX_DT
+
 // PCG32 stream layout (ENGINE_SPEC 1.3). Loaded rather than hard-coded so the
 // two engines cannot drift on a stream index.
 export const PAX_STREAM = Math.trunc(CONSTANTS.PAX_STREAM)
@@ -232,6 +240,17 @@ export class SimConfig {
       )
     }
     if (!(this.dt > 0)) throw new ConfigError(`dt must be positive, got ${this.dt}`)
+    if (this.dt > MAX_DT) {
+      // `dt: 1e6` used to be accepted and reported a 00:00 boarding: every
+      // passenger arrived, stowed and sat inside a single step, so the
+      // simulation never simulated anything. The cap is generous -- twice the
+      // control panel's own maximum -- and exists to make that a rejected
+      // scenario rather than a silently wrong answer.
+      throw new ConfigError(
+        `dt must be at most ${MAX_DT} s -- above that a single step spans more ` +
+          `than the whole aisle-interaction process and the run degenerates, got ${this.dt}`,
+      )
+    }
     if (!(this.sampleInterval > 0)) {
       throw new ConfigError(`sampleInterval must be positive, got ${this.sampleInterval}`)
     }
@@ -241,6 +260,48 @@ export class SimConfig {
     }
     if (this.walkSpeedSd < 0) {
       throw new ConfigError(`walkSpeedSd must be non-negative, got ${this.walkSpeedSd}`)
+    }
+    // The service-time model. A negative scale used to be accepted and made
+    // boarding FASTER -- a negative Weibull draw subtracted from the stow clock
+    // -- which is the worst kind of invalid input: plausible-looking output from
+    // a physically meaningless scenario.
+    if (!(this.stowWeibullShape > 0)) {
+      throw new ConfigError(`stowWeibullShape must be positive, got ${this.stowWeibullShape}`)
+    }
+    if (this.stowWeibullScale < 0) {
+      throw new ConfigError(
+        'stowWeibullScale must be non-negative -- it is a duration in seconds, got ' +
+          `${this.stowWeibullScale}`,
+      )
+    }
+    if (this.stowVariability < 0) {
+      throw new ConfigError(
+        `stowVariability must be non-negative -- it is a standard deviation, got ${this.stowVariability}`,
+      )
+    }
+    if (this.shuffleMoveMin < 0) {
+      throw new ConfigError(
+        'shuffleMoveMin must be non-negative -- movement times are durations in ' +
+          `seconds, got ${this.shuffleMoveMin}`,
+      )
+    }
+    if (!(this.slowSpeedFactor > 0)) {
+      // Zero would give a slow passenger a walk speed of zero, i.e. a passenger
+      // who never reaches their seat: a deadlock, not a scenario.
+      throw new ConfigError(
+        `slowSpeedFactor must be positive -- it multiplies walk speed, got ${this.slowSpeedFactor}`,
+      )
+    }
+    if (this.slowStowFactor < 0) {
+      throw new ConfigError(`slowStowFactor must be non-negative, got ${this.slowStowFactor}`)
+    }
+    for (const name of ['binSearchPenalty', 'gateCheckPenalty', 'binCongestionWeight']) {
+      if (this[name] < 0) throw new ConfigError(`${name} must be non-negative, got ${this[name]}`)
+    }
+    if (this.shuffleSamePartyMovements < 0) {
+      throw new ConfigError(
+        `shuffleSamePartyMovements must be non-negative, got ${this.shuffleSamePartyMovements}`,
+      )
     }
     if (!(this.shuffleMoveMin <= this.shuffleMoveMode && this.shuffleMoveMode <= this.shuffleMoveMax)) {
       throw new ConfigError(
