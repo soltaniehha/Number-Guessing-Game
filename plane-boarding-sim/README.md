@@ -214,13 +214,16 @@ $ cd python && python3 -m plane_boarding.cli compare --aircraft a320neo \
 ======================================================================================================================
 ```
 
-That last footnote is the engine telling on the naive implementation, and it is
-worth following. With two doors there is no single cabin-wide zone order that is
-right for both of them: calling the rear zone first is far-end-first at 1L and
-**near**-end-first at 2L, which is the front-to-back pathology in miniature. So
-spatially ordered strategies sequence within each door's own region instead
+The footnote at the bottom is the engine flagging its own worst door-sequencing
+score, and it is worth following. Here it names `front_to_back`, which is
+supposed to score badly — but the metric exists because of a problem in the
+*other* direction. With two doors there is no single cabin-wide zone order that
+is right for both of them: calling the rear zone first is far-end-first at 1L
+and **near**-end-first at 2L, which is the front-to-back pathology in miniature.
+So spatially ordered strategies sequence within each door's own region instead
 (`doorAwareZones`, on by default; ENGINE_SPEC §4.1). Turn it off and you get the
-cabin-wide order every published zone scheme actually describes:
+cabin-wide order every published zone scheme actually describes — and the engine
+starts flagging `rotating_zone`, a strategy that is trying to be sensible:
 
 ```
 $ cd python && python3 -m plane_boarding.cli compare --aircraft a320neo \
@@ -290,11 +293,12 @@ A few of those rows are worth not glossing over. `back_to_front` and
 +0.16 — and the clock does not notice, 1.182 against 1.188. Removing the
 near-door-first pathology at the aft door is not, on its own, worth measurable
 time for a scheme that was already concentrating everyone into one band of aisle
-at once. And `southwest_2026` moves by 0.003, `priority_5tier` not at all: the
-latter never asks where anyone sits, so there is no region for it to be measured
-in. That pair is the finding at the top of this file restated as a null result —
-door-awareness is a spatial fix, and the thing cancelling the flow benefit is not
-spatial.
+at once. And `southwest_2026`'s time moves by 0.003 even though its sequencing
+is fully repaired, −0.01 to +0.07, while `priority_5tier` moves in neither
+column: it never asks where anyone sits, so there is no region for it to be
+measured in at all. That pair is the finding at the top of this file restated as
+a null result — door-awareness is a spatial fix, and the thing cancelling the
+flow benefit is not spatial.
 
 In the app this is one switch, *Zones measured per door*, in the Behaviour
 section: live whenever two doors are open and the strategy orders by position
@@ -305,8 +309,8 @@ when it cannot do anything.
 
 ## The sixteen strategies
 
-Ratios are from the run above: A320neo, one door, 171 passengers, 40
-replications. `docs/STRATEGIES.md` is the normative definition of each, with
+Ratios are from the `make demo` run above: A320neo, **one** door, 171
+passengers, 40 replications. `docs/STRATEGIES.md` is the normative definition of each, with
 who flies it and where the claim comes from.
 
 | key | what it does | ratio |
