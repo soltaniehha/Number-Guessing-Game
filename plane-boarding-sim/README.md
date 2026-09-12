@@ -30,8 +30,8 @@ advantage is gone: `southwest_2026`, the scheme a real airline actually shipped
 on 27 January 2026, comes out at **1.053** — 36 seconds *slower* than a
 free-for-all, interval clear of zero. Our own `common_sense_5tier`, which merges
 the ladder more carefully and beats Southwest's design on 8 of 8 independent
-seed bases, still only reaches **1.027**, an interval spanning zero: a tie with
-boarding at random. The 39 seconds the ordering earns come back as a 75-second
+single-door seed bases, still only reaches **1.027** here, an interval spanning
+zero: a tie with boarding at random. The 39 seconds the ordering earns come back as a 75-second
 swing in one case and a 57-second swing in the other.
 
 The reason is the same in both, and it is not a flaw in either design. Status
@@ -310,8 +310,8 @@ when it cannot do anything.
 ## The sixteen strategies
 
 Ratios are from the `make demo` run above: A320neo, **one** door, 171
-passengers, 40 replications. `docs/STRATEGIES.md` is the normative definition of each, with
-who flies it and where the claim comes from.
+passengers, 40 replications. `docs/STRATEGIES.md` is the normative definition of
+each, with who flies it and where the claim comes from.
 
 | key | what it does | ratio |
 |---|---|---|
@@ -419,8 +419,8 @@ The acceptance test is Schultz's regression over **282 measured single-aisle
 boardings**: `T ≈ 4.5N + 138 s`, so 948 s for 180 passengers, with a ±15% band.
 The model lands inside it — 1052 s for random boarding on a single-door A320neo
 at 180 passengers over 30 replications, against a 806–1090 s band — and the
-strategy ordering assertion (`front-to-back > back-to-front > random > {WilMA, reverse pyramid} >
-Steffen`) holds as a hard test, not an aspiration.
+strategy ordering assertion (`front-to-back > back-to-front > random >
+{WilMA, reverse pyramid} > Steffen`) holds as a hard test, not an aspiration.
 
 **The trade-off is real and it is recorded, not hidden.** Hitting that absolute
 number required partial aisle blocking (`stowPassSpeedFactor = 0.40`). Strict
@@ -481,9 +481,10 @@ and diffs a canonical digest of each: total seconds, passenger and seat counts,
 doors used, a hash of the resolved cabin geometry, the walk/stow/shuffle/blocked
 breakdown, the interference histogram, gate checks, bin searches, aisle-block
 episodes, the seated curve resampled onto a fixed 10 s grid, and the first
-twenty sit times. Floats are compared to 1e-6. The fixtures cover every airframe, both door topologies, an
-empty cabin, a full one, open seating, and Schultz's own configuration pinned
-explicitly so it cannot drift when a shipped default moves.
+twenty sit times. Floats are compared to 1e-6. The fixtures cover every
+airframe, both door topologies, an empty cabin, a full one, open seating, and
+Schultz's own configuration pinned explicitly so it cannot drift when a shipped
+default moves.
 
 ```
 ==============================================================
@@ -575,10 +576,10 @@ so the explanation reaches the people who most need it, and the handler simply
 refuses the change. *Zones measured per door* is the one to try first: switch to
 a two-door aircraft and a strategy that orders by position along the cabin, flip
 it, and watch `front_to_back` get much worse. Pick a single-door airframe and it
-goes dead and tells you why. Eight presets — including Southwest before and after January
-2026, on the same aircraft, as a built-in A/B. Config copies to JSON or to a
-shareable URL. Dark by default with a light theme; keyboard shortcuts for
-play/pause, step, reset and mode; responsive down to 400 px.
+goes dead and tells you why. Eight presets — including Southwest before and
+after January 2026, on the same aircraft, as a built-in A/B. Config copies to
+JSON or to a shareable URL. Dark by default with a light theme; keyboard
+shortcuts for play/pause, step, reset and mode; responsive down to 400 px.
 
 The sweep in Analytics and Compare is worth finding. It re-runs every strategy
 across a range of *one* scenario parameter and plots the curve. Load factor
