@@ -12,7 +12,7 @@
  */
 import { getAircraft } from './aircraft.js'
 import { simulate } from './engine.js'
-import { Aggregate } from './metrics.js'
+import { Aggregate, PairedDifference } from './metrics.js'
 import { sortByKey } from './pyutil.js'
 import { STRATEGIES } from './strategies.js'
 
@@ -21,6 +21,12 @@ const INTERFERENCE_KEYS = ['none', 'one', 'two', 'sameParty']
 /** `n` replications of one strategy. */
 export class BatchResult {
   constructor(strategy, aircraftId, loadFactor, results) {
+    // Recorded so a paired comparison can VERIFY the pairing rather than assume
+    // it. Two batches may only be paired if their seed sequences are identical;
+    // otherwise the difference is between unrelated runs and the resulting
+    // interval is confidently wrong.
+    this.seeds = results.map((r) => r.seed)
+    this.pairedVsBaseline = null
     this.strategy = strategy
     this.aircraftId = aircraftId
     this.loadFactor = loadFactor
@@ -42,6 +48,22 @@ export class BatchResult {
     return this.totalSeconds.mean
   }
 
+  /** Paired difference of this batch minus `other`. Negative = faster. */
+  pairedAgainst(other) {
+    if (this.seeds.length !== other.seeds.length ||
+        this.seeds.some((s, i) => s !== other.seeds[i])) {
+      throw new Error(
+        `cannot pair '${this.strategy}' against '${other.strategy}': seed ` +
+          'sequences differ, so the replications are not matched',
+      )
+    }
+    return new PairedDifference(
+      this.totalSeconds.values,
+      other.totalSeconds.values,
+      other.strategy,
+    )
+  }
+
   toDict(keepValues = false) {
     return {
       strategy: this.strategy,
@@ -55,6 +77,7 @@ export class BatchResult {
       throughputPaxPerMin: this.throughput.toDict(),
       p90TimeToSeat: this.timeToSeat.toDict(),
       doorSequencing: this.sequencing.toDict(),
+      pairedVsBaseline: this.pairedVsBaseline ? this.pairedVsBaseline.toDict() : null,
       interference: { ...this.interference },
     }
   }
@@ -84,6 +107,11 @@ export function compareStrategies(cfg, strategies = null, runs = 30, seedBase = 
     out.push(runBatch(cfg.replace({ strategy: key }), runs, seedBase, cb))
   }
   sortByKey(out, (b) => b.mean)
+  // Attach the paired comparison against the `random` baseline. This is the
+  // number that answers "is this strategy really better", as against the
+  // marginal interval which answers "how long will it actually take".
+  const baseline = out.find((b) => b.strategy === 'random') ?? (out.length ? out[0] : null)
+  if (baseline !== null) for (const b of out) b.pairedVsBaseline = b.pairedAgainst(baseline)
   return out
 }
 

@@ -136,3 +136,68 @@ class Aggregate:
         if keep_values:
             d["values"] = list(self.values)
         return d
+
+
+class PairedDifference:
+    """Paired comparison of two strategies run under common random numbers.
+
+    With CRN, replication `i` of every strategy faces the SAME passenger
+    manifest -- same bags, same walk speeds, same parties -- because the `pax`
+    stream is seeded independently of the `order` stream. The difference
+    `T_a[i] - T_b[i]` cancels the manifest out, and a confidence interval on the
+    mean of those differences is the **statistically correct** analysis: the two
+    samples are correlated, so the independent-samples formula you would apply
+    by eye to two marginal error bars does not hold in either direction.
+
+    It is usually tighter too, but be accurate about how much. Our CRN is
+    PARTIAL: the `pax` stream is shared, so the manifest is identical, but the
+    `sim` stream (stow, shuffle and door draws) is consumed in event order,
+    which differs by strategy -- so the same passenger gets a different stow
+    time under a different boarding order. Measured on a320neo/1L/180 pax at 30
+    replications, the paired interval runs 8-27% narrower than the unpaired one
+    for strategies close to the baseline, and can be a few percent WIDER for one
+    that diverges strongly (back-to-front), where the residual correlation is
+    near zero. Making the `sim` draws per-passenger rather than per-event would
+    give a much stronger reduction; it also changes draw order, so it is a
+    cross-engine change and not a free one.
+
+    Sign convention: negative means `a` is FASTER than `b`.
+
+    """
+
+    __slots__ = ("baseline", "n", "mean", "sd", "ci95", "lo", "hi",
+                 "meanRatio", "ratioCi95", "ratioLo", "ratioHi", "significant")
+
+    def __init__(self, a: Sequence[float], b: Sequence[float], baseline: str = ""):
+        if len(a) != len(b):
+            raise ValueError(
+                f"cannot pair {len(a)} replications against {len(b)} -- the two "
+                f"batches must be the same length and run on the same seeds"
+            )
+        self.baseline = baseline
+        n = len(a)
+        self.n = n
+        diffs = [x - y for x, y in zip(a, b)]
+        ratios = [(x / y) for x, y in zip(a, b) if y > 0]
+        self.mean, self.sd, self.ci95 = _mean_sd_ci(diffs)
+        self.lo, self.hi = self.mean - self.ci95, self.mean + self.ci95
+        self.meanRatio, _, self.ratioCi95 = _mean_sd_ci(ratios)
+        self.ratioLo = self.meanRatio - self.ratioCi95
+        self.ratioHi = self.meanRatio + self.ratioCi95
+        # A difference is real when its interval excludes zero.
+        self.significant = self.lo > 0.0 or self.hi < 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {k: getattr(self, k) for k in self.__slots__}
+
+
+def _mean_sd_ci(values: Sequence[float]):
+    n = len(values)
+    if n == 0:
+        return 0.0, 0.0, 0.0
+    mean = sum(values) / n
+    if n < 2:
+        return mean, 0.0, 0.0
+    var = sum((v - mean) ** 2 for v in values) / (n - 1)
+    sd = var ** 0.5
+    return mean, sd, 1.96 * sd / (n ** 0.5)

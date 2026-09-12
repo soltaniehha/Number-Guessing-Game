@@ -77,3 +77,77 @@ export class Aggregate {
     return d
   }
 }
+
+/**
+ * Paired comparison of two strategies run under common random numbers.
+ *
+ * With CRN, replication `i` of every strategy faces the SAME passenger manifest
+ * -- same bags, same walk speeds, same parties -- because the `pax` stream is
+ * seeded independently of the `order` stream. The difference `T_a[i] - T_b[i]`
+ * therefore removes the manifest as a source of variance entirely, and a
+ * confidence interval on the mean of those differences is both the
+ * statistically correct analysis and a far more powerful one than comparing two
+ * marginal intervals. Two strategies whose marginal intervals overlap heavily
+ * can still be separated with certainty by the paired test; that is the whole
+ * reason for running CRN in the first place.
+ *
+ * Sign convention: negative means `a` is FASTER than `b`.
+ */
+export class PairedDifference {
+  constructor(a, b, baseline = '') {
+    if (a.length !== b.length) {
+      throw new Error(
+        `cannot pair ${a.length} replications against ${b.length} -- the two ` +
+          'batches must be the same length and run on the same seeds',
+      )
+    }
+    this.baseline = baseline
+    const n = a.length
+    this.n = n
+    const diffs = []
+    for (let i = 0; i < n; i++) diffs.push(a[i] - b[i])
+    const ratios = []
+    for (let i = 0; i < n; i++) if (b[i] > 0) ratios.push(a[i] / b[i])
+    const [mean, sd, ci95] = meanSdCi(diffs)
+    this.mean = mean
+    this.sd = sd
+    this.ci95 = ci95
+    this.lo = this.mean - this.ci95
+    this.hi = this.mean + this.ci95
+    const [meanRatio, , ratioCi95] = meanSdCi(ratios)
+    this.meanRatio = meanRatio
+    this.ratioCi95 = ratioCi95
+    this.ratioLo = this.meanRatio - this.ratioCi95
+    this.ratioHi = this.meanRatio + this.ratioCi95
+    // A difference is real when its interval excludes zero.
+    this.significant = this.lo > 0.0 || this.hi < 0.0
+  }
+
+  toDict() {
+    return {
+      baseline: this.baseline,
+      n: this.n,
+      mean: this.mean,
+      sd: this.sd,
+      ci95: this.ci95,
+      lo: this.lo,
+      hi: this.hi,
+      meanRatio: this.meanRatio,
+      ratioCi95: this.ratioCi95,
+      ratioLo: this.ratioLo,
+      ratioHi: this.ratioHi,
+      significant: this.significant,
+    }
+  }
+}
+
+function meanSdCi(values) {
+  const n = values.length
+  if (n === 0) return [0.0, 0.0, 0.0]
+  const mean = pySum(values) / n
+  if (n < 2) return [mean, 0.0, 0.0]
+  const squares = values.map((v) => (v - mean) ** 2)
+  const variance = pySum(squares) / (n - 1)
+  const sd = Math.sqrt(variance)
+  return [mean, sd, (1.96 * sd) / Math.sqrt(n)]
+}

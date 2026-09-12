@@ -32,7 +32,7 @@
  * band, `convergence`) is computed by `summariseStrategy` from a trimmed run
  * record that keeps every field it reads.
  */
-import { aggregateBatch, summariseStrategy } from '../state/aggregate.js'
+import { summariseStrategy } from '../state/aggregate.js'
 import { STRATEGIES, runSimulation } from './index.js'
 
 /** Yield to the message queue at least this often, so `stop` lands promptly. */

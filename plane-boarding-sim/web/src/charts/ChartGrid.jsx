@@ -176,10 +176,28 @@ export function ChartGrid({ batch, running = false, className = '' }) {
     return out
   }, [all.length, overflowCount, visibleCount])
 
+  /**
+   * The size of the run as PLANNED. The aggregate ships it as `total`; the
+   * derived product is only a fallback, and it climbs mid-run because
+   * strategies register one at a time.
+   */
+  const planned = Number.isFinite(batch?.total) && batch.total > 0
+    ? batch.total
+    : requested && all.length
+      ? requested * all.length
+      : 0
+
+  // At the very start only the first strategy has reported, so the planned
+  // total is the honest source for "across N strategies".
+  const plannedStrategies = requested && planned
+    ? Math.max(all.length, Math.round(planned / requested))
+    : all.length
+
   const announcement = useMilestoneStatus({
     strategies: all.length,
+    plannedStrategies,
     runs,
-    requested,
+    expected: planned,
     running,
     complete,
     notices,
@@ -254,45 +272,61 @@ export function ChartGrid({ batch, running = false, className = '' }) {
  * A streaming batch updates the run counter several times a second. Pushed
  * into a polite live region that is roughly four announcements a second — the
  * queue never drains and the screen-reader user hears nothing else for the
- * rest of the session (measured: 39 mutations in 10.5 s). So the live region
- * only ever carries: the start, each quarter of the way through, the finish,
- * a stop — and the filter notices, which only change on a click.
+ * rest of the session (measured: 39 text mutations in 10.5 s). So the live
+ * region only ever carries the start, each quarter of the way through, the
+ * finish, a stop — and the filter notices, which only change on a click.
  *
- * Returns the text to put in the live region, '' before anything has happened.
+ * Two details keep it honest while a run is still discovering its own size:
+ * strategies arrive one at a time, so the denominator only ever grows, and a
+ * quarter that has already been announced is never announced again.
+ *
+ * Returns the text for the live region, '' before anything has happened.
  */
-export function useMilestoneStatus({ strategies, runs, requested, running, complete, notices }) {
+const QUARTERS = ['', 'A quarter of the way', 'Halfway', 'Three quarters of the way']
+
+export function useMilestoneStatus({ strategies, plannedStrategies, runs, expected, running, complete, notices }) {
   const [announcement, setAnnouncement] = useState('')
-  const lastKey = useRef(null)
+  const last = useRef({ phase: 'idle', quarter: -1, expected: 0, runs: 0, notices: '', line: '' })
 
-  const expected = requested && strategies ? requested * strategies : 0
-  const quarter = expected > 0 ? Math.min(3, Math.max(0, Math.floor((runs / expected) * 4))) : 0
   const noticeText = notices.join(' ')
-
   const phase = complete ? 'complete' : running ? 'running' : strategies > 0 ? 'paused' : 'idle'
-  const key = `${phase}:${phase === 'running' ? quarter : ''}:${noticeText}`
 
   useEffect(() => {
-    if (lastKey.current === key) return
-    lastKey.current = key
-    const total = expected ? ` of ${formatNumber(expected)}` : ''
-    let line = ''
-    if (phase === 'running' && quarter === 0) {
-      line = expected
-        ? `Run started — streaming ${formatNumber(expected)} replications across ${formatNumber(strategies)} ` +
-          `${strategies === 1 ? 'strategy' : 'strategies'}.`
-        : `Run started — streaming replications across ${formatNumber(strategies)} strategies.`
-    } else if (phase === 'running') {
-      const words = ['', 'A quarter of the way', 'Halfway', 'Three quarters of the way']
-      line = `${words[quarter]} — ${formatNumber(runs)}${total} replications.`
-    } else if (phase === 'complete') {
-      line =
-        `Run complete — ${formatNumber(runs)} replications across ${formatNumber(strategies)} ` +
-        `${strategies === 1 ? 'strategy' : 'strategies'}.`
-    } else if (phase === 'paused') {
-      line = `Run stopped — ${formatNumber(runs)}${total} replications completed.`
+    const prev = last.current
+    const restarted = phase === 'running' && (prev.phase !== 'running' || runs < prev.runs)
+    const total = restarted ? expected : Math.max(prev.expected, expected)
+    const quarter = total > 0 ? Math.min(3, Math.max(0, Math.floor((runs / total) * 4))) : 0
+    const reached = restarted ? 0 : Math.max(prev.quarter, quarter)
+    const planned = plannedStrategies ?? strategies
+    const plural = strategies === 1 ? 'strategy' : 'strategies'
+    const plannedPlural = planned === 1 ? 'strategy' : 'strategies'
+    const outOf = total ? ` of ${formatNumber(total)}` : ''
+
+    let line = null
+    if (restarted) {
+      line = total
+        ? `Run started — streaming ${formatNumber(total)} replications across ${formatNumber(planned)} ${plannedPlural}.`
+        : `Run started — streaming replications across ${formatNumber(planned)} ${plannedPlural}.`
+    } else if (phase === 'running' && quarter > prev.quarter) {
+      line = `${QUARTERS[quarter]} — ${formatNumber(runs)}${outOf} replications.`
+    } else if (phase !== prev.phase && phase === 'complete') {
+      line = `Run complete — ${formatNumber(runs)} replications across ${formatNumber(strategies)} ${plural}.`
+    } else if (phase !== prev.phase && phase === 'paused') {
+      line = `Run stopped — ${formatNumber(runs)}${outOf} replications completed.`
     }
-    setAnnouncement([line, noticeText].filter(Boolean).join(' '))
-  }, [expected, key, noticeText, phase, quarter, runs, strategies])
+
+    const changed = line !== null || noticeText !== prev.notices
+    last.current = {
+      phase,
+      quarter: reached,
+      expected: total,
+      runs,
+      notices: noticeText,
+      line: line ?? prev.line,
+    }
+    if (!changed) return
+    setAnnouncement([last.current.line, noticeText].filter(Boolean).join(' '))
+  }, [expected, noticeText, phase, plannedStrategies, runs, strategies])
 
   return announcement
 }

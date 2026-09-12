@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 from .aircraft import get_aircraft
 from .config import SimConfig
 from .engine import simulate
-from .metrics import Aggregate, RunResult
+from .metrics import Aggregate, PairedDifference, RunResult
 from .strategies import STRATEGIES
 
 
@@ -26,11 +26,17 @@ class BatchResult:
     __slots__ = (
         "strategy", "aircraftId", "loadFactor", "runs", "totalSeconds",
         "gateChecks", "interference", "timeToSeat", "throughput", "paxCount",
-        "sequencing",
+        "sequencing", "seeds", "pairedVsBaseline",
     )
 
     def __init__(self, strategy: str, aircraft_id: str, load_factor: float,
                  results: Sequence[RunResult]):
+        # Recorded so a paired comparison can VERIFY the pairing rather than
+        # assume it. Two batches may only be paired if their seed sequences are
+        # identical; otherwise the difference is between unrelated runs and the
+        # resulting interval is confidently wrong.
+        self.seeds = tuple(r.seed for r in results)
+        self.pairedVsBaseline: Optional[PairedDifference] = None
         self.strategy = strategy
         self.aircraftId = aircraft_id
         self.loadFactor = load_factor
@@ -52,6 +58,16 @@ class BatchResult:
     def mean(self) -> float:
         return self.totalSeconds.mean
 
+    def paired_against(self, other: "BatchResult") -> PairedDifference:
+        """Paired difference of this batch minus `other`. Negative = faster."""
+        if self.seeds != other.seeds:
+            raise ValueError(
+                f"cannot pair {self.strategy!r} against {other.strategy!r}: seed "
+                f"sequences differ, so the replications are not matched"
+            )
+        return PairedDifference(self.totalSeconds.values, other.totalSeconds.values,
+                                baseline=other.strategy)
+
     def to_dict(self, keep_values: bool = False) -> Dict[str, Any]:
         return {
             "strategy": self.strategy,
@@ -65,6 +81,8 @@ class BatchResult:
             "throughputPaxPerMin": self.throughput.to_dict(),
             "p90TimeToSeat": self.timeToSeat.to_dict(),
             "doorSequencing": self.sequencing.to_dict(),
+            "pairedVsBaseline": (self.pairedVsBaseline.to_dict()
+                                 if self.pairedVsBaseline else None),
             "interference": dict(self.interference),
         }
 
@@ -107,6 +125,13 @@ def compare_strategies(
         out.append(run_batch(cfg.replace(strategy=key), runs=runs,
                              seed_base=seed_base, progress=cb))
     out.sort(key=lambda b: b.mean)
+    # Attach the paired comparison against the `random` baseline. This is the
+    # number that answers "is this strategy really better", as against the
+    # marginal interval which answers "how long will it actually take".
+    baseline = next((b for b in out if b.strategy == "random"), out[0] if out else None)
+    if baseline is not None:
+        for b in out:
+            b.pairedVsBaseline = b.paired_against(baseline)
     return out
 
 

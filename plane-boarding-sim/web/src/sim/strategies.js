@@ -158,7 +158,9 @@ function stratWilmaZoned(pax, ac, cfg, rng) {
  * Generalised beyond 3-3: "side" is a block (serving aisle plus which side of
  * it), so a 3-4-3 has four sides and produces 8*maxDepth waves rather than 4.
  */
-function stratSteffenPerfect(pax, ac, cfg, rng) {
+// Every strategy is called as `fn(pax, ac, cfg, rng)`; this one is the sole
+// deterministic ordering in the set and needs neither the config nor the RNG.
+function stratSteffenPerfect(pax, ac) {
   const out = []
   let nGroups = 0
   for (let side = 0; side < ac.blockCount; side++) {

@@ -64,10 +64,10 @@ describe('useMilestoneStatus', () => {
     return <p data-testid="live">{text}</p>
   }
 
-  const base = { strategies: 4, requested: 200, running: true, complete: false, notices: [] }
+  const base = { strategies: 4, expected: 800, running: true, complete: false, notices: [] }
 
   it('says nothing before a batch exists', async () => {
-    const view = render(<Probe {...base} strategies={0} runs={0} running={false} />)
+    const view = render(<Probe {...base} strategies={0} expected={0} runs={0} running={false} />)
     await flush()
     expect(view.container.textContent).toBe('')
   })
@@ -128,6 +128,22 @@ describe('useMilestoneStatus', () => {
     const view = render(<Probe {...base} runs={400} notices={['Every strategy is hidden.']} />)
     await flush()
     expect(view.container.textContent).toMatch(/Every strategy is hidden/)
+  })
+
+  it('never re-announces a quarter as the denominator grows', async () => {
+    // Strategies stream in one at a time, so `requested * strategies` climbs
+    // mid-run and the completed fraction can appear to go backwards.
+    const view = render(<Probe {...base} strategies={1} expected={200} runs={0} />)
+    await flush()
+    const live = watch(view.container.querySelector('[data-testid="live"]'))
+    view.update(<Probe {...base} strategies={1} expected={200} runs={60} />)   // 30% of 200
+    await flush()
+    view.update(<Probe {...base} strategies={7} expected={1400} runs={220} />) // 16% of 1400
+    await flush()
+    view.update(<Probe {...base} strategies={7} expected={1400} runs={400} />) // 29% of 1400
+    await flush()
+    live.stop()
+    expect(live.seen.length, 'the quarter mark is announced exactly once').toBe(1)
   })
 })
 

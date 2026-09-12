@@ -22,7 +22,7 @@ from .aircraft import aircraft_ids, geometry_payload, get_aircraft
 from .batch import compare_strategies, load_sweep, run_batch
 from .config import ConfigError, SimConfig, build_config, expected_bags_per_pax
 from .engine import run as engine_run
-from .metrics import RunResult
+from .metrics import PairedDifference, RunResult
 from .strategies import STRATEGIES
 
 BAR_CHARS = "█"
@@ -32,6 +32,13 @@ LIGHT = "░"
 def _fmt_mmss(seconds: float) -> str:
     m, s = divmod(int(round(seconds)), 60)
     return f"{m:d}:{s:02d}"
+
+
+def _fmt_delta(seconds: float) -> str:
+    """Signed m:ss, for a difference rather than a duration."""
+    sign = "-" if seconds < 0 else "+"
+    m, sec = divmod(int(round(abs(seconds))), 60)
+    return f"{sign}{m:d}:{sec:02d}"
 
 
 def _bar(value: float, vmax: float, width: int = 26) -> str:
@@ -44,33 +51,51 @@ def _bar(value: float, vmax: float, width: int = 26) -> str:
 
 
 def shared_ranks(means: Sequence[float], halfwidths: Sequence[float]) -> List[int]:
-    """Competition ranks for a fastest-first list, with statistical ties sharing
-    a rank.
+    """Competition ranks from MARGINAL intervals: overlapping CIs share a rank.
 
-    Two strategies whose 95% confidence intervals overlap are not distinguished
-    by the data, and presenting one above the other invites the reader to act on
-    noise -- which is the easiest way for this tool to mislead somebody. So a
-    run of entries whose intervals all overlap the *leader's* interval shares
-    the leader's rank, and the next distinct group resumes at its own position
-    (1, =2, =2, 4, ...).
-
-    Overlap is tested against the group leader rather than the previous entry on
-    purpose: chaining "overlaps its neighbour" is not transitive and would
-    happily merge an entire table into one tie.
-
-    Note the comparison uses common random numbers, so the marginal intervals
-    are a conservative test -- a paired difference is tighter than these
-    suggest, so this will call some genuinely separated pairs a tie. That is the
-    safe direction to err.
+    Kept for the legend's cross-check against the paired view, and as the
+    honest answer to "could these two durations be confused" when the reader is
+    looking at absolute times. `shared_ranks_paired` is what actually ranks the
+    table -- see its docstring for why.
     """
+    return _rank_by(len(means), lambda i, lead:
+                    means[i] - halfwidths[i] <= means[lead] + halfwidths[lead])
+
+
+def shared_ranks_paired(series: Sequence[Sequence[float]]) -> List[int]:
+    """Competition ranks from the PAIRED difference, which is the correct test.
+
+    Under common random numbers replication `i` of every strategy faces an
+    identical passenger manifest, so `T_a[i] - T_b[i]` cancels the manifest out.
+    The samples are correlated, which means the independent-samples reasoning
+    behind "their error bars overlap" is simply not valid here; the paired
+    interval is the correct one, and in practice usually the tighter one too.
+    Two strategies tie only when the interval on their paired difference
+    contains zero.
+
+    The old marginal rule was the conservative fallback: it over-called ties,
+    which is the safer error when it is the only option available. It no longer
+    is. Preferring the powered test does not change which error we would rather
+    make -- calling a real difference a tie is still better than the reverse --
+    it just means we now decline far fewer real differences.
+
+    Overlap is still tested against the group LEADER rather than the previous
+    entry: "not distinguishable from its neighbour" is not transitive and would
+    merge an entire table into a single tie.
+    """
+    return _rank_by(len(series), lambda i, lead:
+                    not PairedDifference(series[i], series[lead]).significant)
+
+
+def _rank_by(n: int, ties_with_leader) -> List[int]:
+    """Competition ranking (1, =2, =2, 4, ...) over a fastest-first list."""
     ranks: List[int] = []
     leader = 0
-    for i, (m, h) in enumerate(zip(means, halfwidths)):
+    for i in range(n):
         if i == 0:
             ranks.append(1)
-            continue
-        if m - h <= means[leader] + halfwidths[leader]:
-            ranks.append(ranks[leader])          # ties with the group leader
+        elif ties_with_leader(i, leader):
+            ranks.append(ranks[leader])
         else:
             leader = i
             ranks.append(i + 1)
@@ -190,35 +215,59 @@ def cmd_compare(args: argparse.Namespace) -> int:
     worst = max(b.mean for b in results)
 
     print()
-    print("=" * 100)
+    print("=" * 118)
     print(f" {ac.name}  —  {args.runs} replications per strategy, "
           f"{results[0].paxCount} passengers, doors {','.join(cfg.doors or ac.default_doors())}")
-    print(" ranked fastest first; 'vs random' is the mean ratio "
-          "(common random numbers, so the comparison is paired)")
-    print("=" * 100)
+    print(" ranked fastest first by the PAIRED comparison against free-for-all")
+    print("=" * 118)
     multi_door = len(cfg.doors or ac.default_doors()) > 1
-    ranks = shared_ranks([b.mean for b in results],
-                         [b.totalSeconds.ci95 for b in results])
+    series = [b.totalSeconds.values for b in results]
+    ranks = shared_ranks_paired(series)
+    marginal = shared_ranks([b.mean for b in results],
+                            [b.totalSeconds.ci95 for b in results])
     tied = {r for r in ranks if ranks.count(r) > 1}
-    idle_col = f" {'far-first':>9s}"
-    hdr = (f" {'#':>3}  {'strategy':<20s} {'mean':>7s} {'+/-95%':>7s} "
-           f"{'sd':>6s} {'p05':>6s} {'p95':>6s} {'vs rnd':>7s}{idle_col}  relative time")
-    print(hdr)
-    print("-" * 100)
+
+    print(f" {'#':>3}  {'strategy':<20s} {'mean':>7s} {'+/-95%':>7s} {'p95':>6s} "
+          f"{'vs rnd':>7s}  {'paired vs random (95% CI)':<25s} {'far-1st':>7s}  "
+          f"relative time")
+    print("-" * 118)
     for b, rank in zip(results, ranks):
         ratio = b.mean / baseline.mean if baseline.mean else 0.0
-        idle = f" {b.sequencing.mean:+9.2f}"
+        pv = b.pairedVsBaseline
+        if pv is None or b.strategy == baseline.strategy:
+            paired = "(baseline)"
+        else:
+            paired = (f"{_fmt_delta(pv.mean)} "
+                      f"[{_fmt_delta(pv.lo)},{_fmt_delta(pv.hi)}]"
+                      f"{'' if pv.significant else '  ns'}")
         label = f"={rank}" if rank in tied else str(rank)
         print(f" {label:>3s}  {b.strategy:<20s} {_fmt_mmss(b.mean):>7s} "
-              f"{b.totalSeconds.ci95:7.1f} {b.totalSeconds.sd:6.1f} "
-              f"{_fmt_mmss(b.totalSeconds.p05):>6s} {_fmt_mmss(b.totalSeconds.p95):>6s} "
-              f"{ratio:7.3f}{idle}  {_bar(b.mean, worst, 24)}")
-    print("-" * 100)
+              f"{b.totalSeconds.ci95:7.1f} {_fmt_mmss(b.totalSeconds.p95):>6s} "
+              f"{ratio:7.3f}  {paired:<25s} {b.sequencing.mean:+7.2f}  "
+              f"{_bar(b.mean, worst, 18)}")
+    print("-" * 118)
+    print(" 'mean +/-95%' is the MARGINAL interval: how long this strategy actually "
+          "takes, on its own.")
+    print(" 'paired vs random' is the per-replication difference on matched seeds. "
+          "Every strategy")
+    print("   sees the identical passenger manifest, so the difference cancels it out. "
+          "That makes this")
+    print("   the correct test -- the samples are correlated, so overlapping marginal "
+          "bars prove nothing")
+    print("   either way -- and usually the tighter one. 'ns' = interval contains zero. "
+          "RANKS USE THIS.")
     if tied:
-        print(" '=' marks a SHARED rank: those strategies' 95% confidence intervals"
-              " overlap, so this many")
-        print(" replications cannot tell them apart. Treat them as equal, not as"
-              " ordered.")
+        print(" '=' marks a SHARED rank: the paired test cannot separate those "
+              "strategies at this many")
+        print("   replications. Treat them as equal, not as ordered.")
+    if ranks != marginal:
+        n_extra = sum(1 for r in marginal if marginal.count(r) > 1) - \
+                  sum(1 for r in ranks if ranks.count(r) > 1)
+        print(f" NOTE: the marginal view would call {max(0, n_extra)} more of these "
+              f"a tie. The two disagreeing is")
+        print("   the point, not a fault: pairing is the more powerful test, so "
+              "differences can be real")
+        print("   even where the absolute-time intervals overlap.")
     best = results[0]
     saving = baseline.mean - best.mean
     joint = [b.strategy for b, r in zip(results, ranks) if r == ranks[0]]
@@ -247,7 +296,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
             print("   -> With two doors a single cabin-wide zone order cannot be right for "
                   "both: calling the rear zone first is far-end-first at 1L and "
                   "near-end-first at 2L. Zone order has to be set per door.")
-    print("=" * 100)
+    print("=" * 118)
     return 0
 
 
