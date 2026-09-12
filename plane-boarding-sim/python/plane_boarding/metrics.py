@@ -23,6 +23,33 @@ def percentile(sorted_values: Sequence[float], q: float) -> float:
     return float(sorted_values[lo]) * (1.0 - frac) + float(sorted_values[hi]) * frac
 
 
+#: Two-sided 95% t critical values for df = 1..30. Above 30 the normal
+#: approximation is within 0.5% and 1.96 is used.
+_T95 = (
+    12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228,
+    2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086,
+    2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042,
+)
+
+
+def t_critical_95(df: int) -> float:
+    """Two-sided 95% critical value for `df` degrees of freedom.
+
+    A flat 1.96 is the LARGE-SAMPLE limit, and this project routinely reports
+    n = 5..25: at n=5 it understates the interval by 41.6%, at n=8 by 20.7%, at
+    n=12 by 12.3%, and only past n≈50 does the gap fall below 0.5%. Reporting a
+    "95% interval" that is 40% too narrow is not a rounding difference -- it
+    changes which strategy comparisons read as significant, which is the one
+    question this tool exists to answer.
+
+    The same table `web/src/charts/primitives/stats.js` uses, so a number drawn
+    on a chart and the same number in a batch result agree.
+    """
+    if df < 1:
+        return float("nan")
+    return _T95[df - 1] if df <= 30 else 1.96
+
+
 class PassengerRecord:
     """Per-passenger outcome. Flat and JSON-shaped on purpose: it goes straight
     into the replay file and the web app's per-passenger inspector."""
@@ -68,6 +95,11 @@ class RunResult:
 
     def to_dict(self, per_passenger: bool = True) -> Dict[str, Any]:
         out: Dict[str, Any] = {
+            # Derived, and serialised rather than left as a Python-only property
+            # so the two engines' RunResult documents have the SAME key set --
+            # `parity/compare.py --full` compares them field by field and a key
+            # present on one side only is a divergence like any other.
+            "gateCheckRate": self.gateCheckRate,
             "totalSeconds": self.totalSeconds,
             "totalMinutes": self.totalMinutes,
             "strategy": self.strategy,
@@ -133,7 +165,7 @@ class Aggregate:
         """Half-width of the 95% confidence interval on the mean."""
         if self.n < 2:
             return 0.0
-        return 1.96 * self.sd / (self.n ** 0.5)
+        return t_critical_95(self.n - 1) * self.sd / (self.n ** 0.5)
 
     def to_dict(self, keep_values: bool = False) -> Dict[str, Any]:
         d = {
@@ -215,4 +247,4 @@ def _mean_sd_ci(values: Sequence[float]):
         return mean, 0.0, 0.0
     var = sum((v - mean) ** 2 for v in values) / (n - 1)
     sd = var ** 0.5
-    return mean, sd, 1.96 * sd / (n ** 0.5)
+    return mean, sd, t_critical_95(n - 1) * sd / (n ** 0.5)

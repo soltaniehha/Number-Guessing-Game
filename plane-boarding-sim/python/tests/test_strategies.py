@@ -46,8 +46,15 @@ def test_wilma_puts_all_windows_before_all_middles_before_all_aisles():
 
 def test_steffen_perfect_alternates_rows_within_each_wave():
     """Consecutive boarders in a wave must be two row slots apart -- that is the
-    entire mechanism, and it is what lets a whole wave stow simultaneously."""
-    cfg = clean_cfg("a320neo", "steffen_perfect", seed=3)
+    entire mechanism, and it is what lets a whole wave stow simultaneously.
+
+    Stated through ONE door, where a wave is a single rear-to-front run. With
+    two doors a wave interleaves the two door regions (see
+    `test_steffen_perfect_runs_far_end_first_within_each_door_region`), so the
+    slots are not monotone across the whole cabin and would not be expected to
+    be -- each door still sees its own alternating run.
+    """
+    cfg = clean_cfg("a320neo", "steffen_perfect", seed=3, doors=["1L"])
     _, queue = make_queue(cfg)
     waves = {}
     for p in queue:
@@ -69,7 +76,9 @@ def test_steffen_perfect_alternates_rows_within_each_wave():
 
 
 def test_back_to_front_really_is_rear_first():
-    cfg = clean_cfg("a320neo", "back_to_front", seed=3)
+    """Through ONE door, where "rear" and "far from the door" are the same thing.
+    The two-door meaning is asserted separately, below."""
+    cfg = clean_cfg("a320neo", "back_to_front", seed=3, doors=["1L"])
     _, queue = make_queue(cfg)
     first = [p.rowSlot for p in queue[:20]]
     last = [p.rowSlot for p in queue[-20:]]
@@ -77,9 +86,89 @@ def test_back_to_front_really_is_rear_first():
 
 
 def test_front_to_back_really_is_front_first():
-    cfg = clean_cfg("a320neo", "front_to_back", seed=3)
+    cfg = clean_cfg("a320neo", "front_to_back", seed=3, doors=["1L"])
     _, queue = make_queue(cfg)
     assert max(p.rowSlot for p in queue[:20]) < min(p.rowSlot for p in queue[-20:])
+
+
+def _door_of(ac, cfg, p):
+    from plane_boarding.aircraft import SeatDoorSplit
+    return SeatDoorSplit(ac.resolve_doors(cfg.doors), cfg.doorAssignment).of_seat(p.seat)
+
+
+def _mean_distance_from_door(ac, cfg, group):
+    return sum(abs(p.seat.x - _door_of(ac, cfg, p).x) for p in group) / len(group)
+
+
+#: Every strategy whose queue is ordered by position along the cabin. Steffen is
+#: absent on purpose: its outer loop is side x parity x depth and each WAVE
+#: sweeps far-to-near independently, so the queue as a whole is spatially flat by
+#: construction. Its own far-end-first property is asserted per wave, below.
+DOOR_AWARE_SPATIAL = ["back_to_front", "block_boarding", "wilma_zoned",
+                      "reverse_pyramid", "common_sense_5tier", "southwest_2026",
+                      "rotating_zone"]
+
+
+@pytest.mark.parametrize("strategy", DOOR_AWARE_SPATIAL)
+def test_spatial_strategies_board_far_from_their_own_door_first(strategy):
+    """The two-door meaning of "rear first".
+
+    A cabin-wide rear-first order is far-end-first at the forward door and
+    NEAR-end-first at the aft one, which is the front-to-back pathology at half
+    the aircraft. Every strategy with a spatial component must instead work
+    outward from the far end of ITS OWN door's region, so the first half of each
+    door's queue sits further from that door than the second half.
+    """
+    cfg = clean_cfg("a320neo", strategy, seed=3, doors=["1L", "2L"])
+    ac, queue = make_queue(cfg)
+    by_door: dict = {}
+    for p in queue:
+        by_door.setdefault(_door_of(ac, cfg, p).id, []).append(p)
+    assert len(by_door) == 2, "this test needs both doors to be used"
+    for did, group in by_door.items():
+        half = len(group) // 2
+        early = _mean_distance_from_door(ac, cfg, group[:half])
+        late = _mean_distance_from_door(ac, cfg, group[half:])
+        assert early > late, (
+            f"{strategy}: at door {did} the first half of the queue averages "
+            f"{early:.1f} m from the door and the second half {late:.1f} m -- "
+            f"that is near-end-first, the front-to-back pathology")
+
+
+def test_the_cabin_wide_fallback_still_produces_the_pathology():
+    """`doorAwareZones: false` is kept deliberately, because the contrast is what
+    makes the point. It must therefore still be wrong in the documented way."""
+    cfg = clean_cfg("a320neo", "back_to_front", seed=3, doors=["1L", "2L"],
+                    doorAwareZones=False)
+    ac, queue = make_queue(cfg)
+    aft = [p for p in queue if _door_of(ac, cfg, p).id == "2L"]
+    half = len(aft) // 2
+    early = _mean_distance_from_door(ac, cfg, aft[:half])
+    late = _mean_distance_from_door(ac, cfg, aft[half:])
+    assert early < late, "the naive cabin-wide order must still be near-first at 2L"
+
+
+def test_steffen_perfect_runs_far_end_first_within_each_door_region():
+    """A wave still alternates rows two apart -- inside each door's region."""
+    cfg = clean_cfg("a320neo", "steffen_perfect", seed=3, doors=["1L", "2L"])
+    ac, queue = make_queue(cfg)
+    waves: dict = {}
+    for p in queue:
+        waves.setdefault((p.groupLabel, _door_of(ac, cfg, p).id), []).append(p)
+    checked = 0
+    for (labelled, did), members in waves.items():
+        if len(members) < 3:
+            continue
+        checked += 1
+        door_x = _door_of(ac, cfg, members[0]).x
+        dists = [abs(p.seat.x - door_x) for p in members]
+        assert dists == sorted(dists, reverse=True), (
+            f"{labelled} at {did} does not run far-end-first: {dists[:6]}")
+        slots = [p.rowSlot for p in members]
+        gaps = [abs(a - b) for a, b in zip(slots, slots[1:])]
+        assert all(g >= 2 and g % 2 == 0 for g in gaps), (
+            f"{labelled} at {did}: rows must still alternate, got {gaps}")
+    assert checked >= 8
 
 
 def test_by_bags_boards_light_travellers_first():
@@ -112,7 +201,9 @@ def test_reverse_pyramid_is_a_diagonal_not_a_row_sweep():
 
 
 def test_rotating_zone_alternates_the_two_ends_of_the_cabin():
-    cfg = clean_cfg("a320neo", "rotating_zone", seed=3, zoneCount=4)
+    """Through ONE door, where the two ends of the cabin and the two ends of the
+    door's region are the same pair of ends."""
+    cfg = clean_cfg("a320neo", "rotating_zone", seed=3, zoneCount=4, doors=["1L"])
     ac, queue = make_queue(cfg)
     seen = []
     for p in queue:

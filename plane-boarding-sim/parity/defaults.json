@@ -55,6 +55,8 @@
   "binCongestionWeight": 0.45,
 
   "zoneCount": 4,
+  "_doorAwareZones_comment": "With more than one boarding door enabled, sequence every spatially-ordered strategy WITHIN each door's own region -- far from THAT door first -- instead of across the whole cabin. A cabin-wide rear-first order is far-end-first at 1L and near-end-first at 2L, and near-end-first is the front-to-back pathology; see ENGINE_SPEC 4.1 and the `doorSequencing` metric in ENGINE_SPEC 7. Set false to recover the naive cabin-wide ordering, which is instructive to contrast and is what every published zone scheme actually describes. No effect with a single door.",
+  "doorAwareZones": true,
   "keepPartiesTogether": true,
   "preboardFirst": true,
   "_nonCompliance_comment": "Schultz's measured conformance rate is 85%, so 15% of passengers ignore the group they were called in.",

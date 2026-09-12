@@ -31,6 +31,15 @@ export function NullableSlider({
     >
       {({ describedBy }) => (
         <div className="nullable">
+          {/*
+            Dragging the range while "Auto" is ticked used to return early and
+            silently snap back — the control accepted the gesture and did
+            nothing with it. On bin capacity, the highest-leverage parameter in
+            the model (1 bag per row-side is 26:11 against 16:09 at 10), that
+            is the single worst place in the panel to swallow an interaction.
+            Moving it now TAKES the parameter over: Auto unticks and the value
+            the user dragged to is the value. Ticking Auto again hands it back.
+          */}
           <input
             id={id}
             className="slider"
@@ -39,11 +48,11 @@ export function NullableSlider({
             max={max}
             step={step}
             value={effective ?? min}
-            aria-disabled={disabled || isAuto || undefined}
+            aria-disabled={disabled || undefined}
             aria-describedby={describedBy}
             aria-valuetext={spoken}
             onChange={(e) => {
-              if (disabled || isAuto) return
+              if (disabled) return
               onChange(snap(Number(e.target.value), step))
             }}
           />

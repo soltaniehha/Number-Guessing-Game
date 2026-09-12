@@ -41,13 +41,40 @@ export function pickKnown(partial, defaults) {
   return out
 }
 
-/** Coerce a door list so it is a legal, non-empty subset of the aircraft's doors. */
+/**
+ * Coerce a door list so it is a legal, non-empty set of BOARDING doors.
+ *
+ * Checking only that the ids exist is not enough: service doors and overwing
+ * exits are real doors on the airframe and appear in `aircraft.doors`, but the
+ * engine refuses to board through them (`e175: door(s) ["2L"] are not boarding
+ * doors`). A config that named one — most easily by inheriting the default
+ * airframe's `["1L","2L"]` while naming a different aircraft — made every run
+ * fail until the user un-ticked a door they never set.
+ */
 export function sanitizeDoors(doors, aircraft) {
-  const available = (aircraft?.doors || []).map((d) => d.id)
-  if (available.length === 0) return Array.isArray(doors) ? [...doors] : []
-  const kept = available.filter((id) => (doors || []).includes(id))
+  const all = aircraft?.doors || []
+  if (all.length === 0) return Array.isArray(doors) ? [...doors] : []
+  const boardable = all.filter((d) => d.boardable !== false).map((d) => d.id)
+  const kept = boardable.filter((id) => (doors || []).includes(id))
   // Invariant: an aeroplane you cannot get into is not a scenario.
   return kept.length ? kept : defaultDoorsFor(aircraft)
+}
+
+/**
+ * A finite number, or the fallback.
+ *
+ * `Number()` alone is not the test it looks like: `Number(null)`, `Number('')`,
+ * `Number([])` and `Number(false)` are all `0`, all finite, and none of them is
+ * a number anybody wrote. `{"loadFactor":null}` used to coerce to 0 — the
+ * slider then clamped its *display* to its 0.3 minimum while the config still
+ * said 0, so the panel read 30% and no passengers boarded.
+ */
+function numberOr(value, fallback) {
+  if (value === null || value === undefined || typeof value === 'boolean') return fallback
+  if (typeof value === 'string' && value.trim() === '') return fallback
+  if (typeof value === 'object') return fallback
+  const n = Number(value)
+  return Number.isFinite(n) ? n : fallback
 }
 
 /**
@@ -63,6 +90,14 @@ export function sanitizeDoors(doors, aircraft) {
  * means "inherit from the airframe" when null); they accept null or a finite
  * number and nothing else. Booleans are held to `typeof` for the same reason —
  * `Boolean('false')` is not the answer anyone wants.
+ *
+ * String defaults (`aircraftId`, `strategy`, `doorAssignment`,
+ * `openSeatingPolicy`) are held to `typeof` too. Without that branch they
+ * passed through entirely unvalidated, and `aircraftId` is dereferenced during
+ * render — `#c1=` + `{"aircraftId":42}` threw inside the reducer's lazy
+ * initialiser and blanked the page. Whether the string names something that
+ * exists is a separate question, answered against the engine's registries in
+ * `sanitizeConfig`.
  */
 export function coerceToSchema(config, defaults) {
   const next = { ...config }
@@ -70,8 +105,9 @@ export function coerceToSchema(config, defaults) {
   for (const [key, fallback] of Object.entries(defaults)) {
     const value = next[key]
     if (typeof fallback === 'number') {
-      const n = Number(value)
-      next[key] = Number.isFinite(n) ? n : fallback
+      next[key] = numberOr(value, fallback)
+    } else if (typeof fallback === 'string') {
+      next[key] = typeof value === 'string' ? value : fallback
     } else if (typeof fallback === 'boolean') {
       next[key] = typeof value === 'boolean' ? value : fallback
     } else if (fallback === null) {
@@ -90,14 +126,54 @@ export function coerceToSchema(config, defaults) {
 }
 
 /**
+ * Resolve the id-shaped fields against the registries that actually define
+ * them, so an id nobody has ever heard of never leaves this module.
+ *
+ * `aircraftId` is the one that matters: it is dereferenced *during render*
+ * (`engine.resolveAircraft(id)` in the store's lazy initialiser), the real
+ * engine throws for an unknown id, and a throw during render with no boundary
+ * above it unmounts the whole tree. `#c1=` + base64url of
+ * `{"aircraftId":"concorde"}` was a blank page with no way back but editing the
+ * URL. Every other corrupted field already degraded to its default.
+ *
+ * @param {object} next config, already type-coerced
+ * @param {object} defaults
+ * @param {{AIRCRAFT?: object, STRATEGIES?: object}} [registries] the live
+ *        engine's own maps. Optional: without them the ids are left as they
+ *        are, which is what the reducer's unit tests want.
+ */
+function resolveIds(next, defaults, registries) {
+  if (!registries) return next
+  const known = (registry, value) =>
+    registry && typeof registry === 'object' && Object.prototype.hasOwnProperty.call(registry, value)
+  if (registries.AIRCRAFT && !known(registries.AIRCRAFT, next.aircraftId)) {
+    next.aircraftId = known(registries.AIRCRAFT, defaults?.aircraftId)
+      ? defaults.aircraftId
+      : Object.keys(registries.AIRCRAFT)[0] ?? next.aircraftId
+  }
+  if (registries.STRATEGIES && !known(registries.STRATEGIES, next.strategy)) {
+    next.strategy = known(registries.STRATEGIES, defaults?.strategy)
+      ? defaults.strategy
+      : Object.keys(registries.STRATEGIES)[0] ?? next.strategy
+  }
+  if (registries.STRATEGIES && Array.isArray(next.compareStrategies)) {
+    const kept = next.compareStrategies.filter((k) => known(registries.STRATEGIES, k))
+    next.compareStrategies = kept.length ? kept : [next.strategy]
+  }
+  return next
+}
+
+/**
  * Clamp a whole config into legality for the aircraft it names.
  *
  * `defaults` is optional only so the two-argument call sites in the tests keep
  * working; pass it whenever you have it, because it is what makes the numeric
- * coercion above possible.
+ * coercion above possible. `registries` is the engine's own `AIRCRAFT` and
+ * `STRATEGIES` maps, and is what turns "a string" into "a string that names
+ * something".
  */
-export function sanitizeConfig(config, aircraft, defaults) {
-  const next = coerceToSchema(config, defaults)
+export function sanitizeConfig(config, aircraft, defaults, registries, movedField) {
+  const next = resolveIds(coerceToSchema(config, defaults), defaults, registries)
   next.doors = sanitizeDoors(next.doors, aircraft)
   if (next.doorAssignment === 'split_by_aisle' && (aircraft?.aisleCount ?? 1) < 2) {
     next.doorAssignment = 'split_by_row'
@@ -125,10 +201,49 @@ export function sanitizeConfig(config, aircraft, defaults) {
           : []
   }
   if (next.sweepRuns != null) next.sweepRuns = Math.max(1, Math.round(Number(next.sweepRuns) || 1))
+  clampTriangle(next, movedField)
   return next
 }
 
-export function makeConfigReducer(defaults) {
+/**
+ * Keep the shuffle-movement triangle ordered: min <= mode <= max.
+ *
+ * The engine rejects any other ordering outright ("shuffle movement times must
+ * satisfy min <= mode <= max"), and the three were independent sliders with no
+ * relationship between them: four of their six extremes produced a run that
+ * failed instead of a run that was merely fast or slow. In a full sweep of all
+ * 45 sliders to both ends — ninety runs — this was the only failure.
+ *
+ * The value the user just moved is the one that wins; the other two give way,
+ * which is what "drag this to 6 s" plainly means. `mode` is settled last so it
+ * always ends up inside the interval however the ends moved.
+ */
+function clampTriangle(next, moved) {
+  const has = (k) => Number.isFinite(next[k])
+  if (!has('shuffleMoveMin') || !has('shuffleMoveMode') || !has('shuffleMoveMax')) return next
+  if (moved === 'shuffleMoveMin') {
+    next.shuffleMoveMax = Math.max(next.shuffleMoveMax, next.shuffleMoveMin)
+  } else if (moved === 'shuffleMoveMax') {
+    next.shuffleMoveMin = Math.min(next.shuffleMoveMin, next.shuffleMoveMax)
+  } else if (moved === 'shuffleMoveMode') {
+    next.shuffleMoveMin = Math.min(next.shuffleMoveMin, next.shuffleMoveMode)
+    next.shuffleMoveMax = Math.max(next.shuffleMoveMax, next.shuffleMoveMode)
+  } else if (next.shuffleMoveMin > next.shuffleMoveMax) {
+    // No single control moved (a link, a pasted blob): keep the wider interval.
+    const lo = Math.min(next.shuffleMoveMin, next.shuffleMoveMax)
+    const hi = Math.max(next.shuffleMoveMin, next.shuffleMoveMax)
+    next.shuffleMoveMin = lo
+    next.shuffleMoveMax = hi
+  }
+  next.shuffleMoveMode = Math.min(next.shuffleMoveMax, Math.max(next.shuffleMoveMin, next.shuffleMoveMode))
+  return next
+}
+
+/** The shuffle-movement triangle: three sliders that constrain each other. */
+const TRIANGLE = new Set(['shuffleMoveMin', 'shuffleMoveMode', 'shuffleMoveMax'])
+
+export function makeConfigReducer(defaults, registries) {
+  const clamp = (config, aircraft, movedField) => sanitizeConfig(config, aircraft, defaults, registries, movedField)
   return function configReducer(state, action) {
     switch (action.type) {
       case 'SET_FIELD': {
@@ -143,16 +258,18 @@ export function makeConfigReducer(defaults) {
           for (const change of airframeChanges(state, defaults, action.prevAircraft, action.aircraft)) {
             next[change.key] = change.to
           }
-          return sanitizeConfig(next, action.aircraft, defaults)
+          return clamp(next, action.aircraft)
         }
-        if (action.field === 'doors') return sanitizeConfig(next, action.aircraft, defaults)
+        if (action.field === 'doors') return clamp(next, action.aircraft)
+        // Cross-clamped groups: the field just moved is the one that wins.
+        if (TRIANGLE.has(action.field)) return clamp(next, action.aircraft, action.field)
         // A new sweep axis has different points; adopt its own, because the
         // previous axis's values are meaningless on it (0.9 is a sensible load
         // factor and a nonsense zone count).
         if (action.field === 'sweepParam') {
           next.sweepValues =
             action.value === DEFAULT_SWEEP_PARAM ? [] : [...sweepAxis(action.value).defaults]
-          return sanitizeConfig(next, action.aircraft, defaults)
+          return clamp(next, action.aircraft)
         }
         return next
       }
@@ -171,17 +288,17 @@ export function makeConfigReducer(defaults) {
       case 'APPLY_PRESET': {
         const base = effectiveDefaults(defaults, action.aircraft)
         const merged = { ...base, ...pickKnown(action.patch, defaults) }
-        return sanitizeConfig(merged, action.aircraft, defaults)
+        return clamp(merged, action.aircraft)
       }
 
       case 'LOAD_CONFIG': {
         const base = effectiveDefaults(defaults, action.aircraft)
         const merged = { ...base, ...pickKnown(action.config, defaults) }
-        return sanitizeConfig(merged, action.aircraft, defaults)
+        return clamp(merged, action.aircraft)
       }
 
       case 'RESET':
-        return sanitizeConfig(effectiveDefaults(defaults, action.aircraft), action.aircraft, defaults)
+        return clamp(effectiveDefaults(defaults, action.aircraft), action.aircraft)
 
       default:
         return state

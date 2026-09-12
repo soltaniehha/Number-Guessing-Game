@@ -405,7 +405,50 @@ It assigns `groupLabel` and returns the passengers in boarding sequence.
 4. **Late arrivals.** With probability `lateRate`, a passenger is moved to the
    very end of the queue (preserving relative order among late arrivals).
 
-### 4.1 Implemented strategies
+### 4.1 Door-aware spatial ordering
+
+Every strategy with a spatial component measures position **from the door the
+passenger will actually use**, not from the nose of the aircraft.
+
+This matters only when more than one boarding door is open, and then it matters
+a lot. "Board the rear zone first" is far-end-first at 1L and **near-end-first
+at 2L**, and near-end-first is the front-to-back pathology applied to half the
+aircraft. The `doorSequencing` metric (§7) exists to measure exactly that, and
+it was scoring the headline strategy badly at the aft door: on the shipped
+two-door a320neo default, `common_sense_5tier` measured *slower* than a
+free-for-all while beating it comfortably through one door.
+
+The rule: the cabin is partitioned between the boarding doors by the same
+`SeatDoorSplit` the engine uses to assign them (§5 -- shared code, so a
+strategy's idea of a region and the engine's idea of a door cannot drift);
+within each region a passenger's rank runs from the far end of that region
+toward its door; bands are cut inside each region; and band *k* of every region
+is called together, so both doors are fed at once rather than one standing idle.
+With two doors on a single-aisle cabin the practical effect is that boarding
+works **outward from the middle** instead of back to front.
+
+It applies to `back_to_front`, `front_to_back`, `wilma_zoned`, `rotating_zone`,
+`block_boarding`, `reverse_pyramid`, `steffen_perfect`, `common_sense_5tier` and
+`southwest_2026`. It does not apply to `random`, `wilma`, `steffen_modified`,
+`by_bags`, `slowest_first`, `priority_5tier` or `open_seating`, none of which
+orders by position along the cabin. `steffen_perfect` is a special case: its
+outer loop is side x parity x depth and each WAVE sweeps far-to-near
+independently, so the far-end-first property holds per wave rather than across
+the queue.
+
+**With one boarding door -- or `doorAssignment: "single"`, or
+`doorAwareZones: false` -- there is one region spanning the whole cabin and
+every strategy takes the old cabin-wide code path verbatim.** Verified: all 288
+single-door boarding queues (6 aircraft x 16 strategies x 3 seeds) are identical
+to the cabin-wide implementation, and every single-door calibration figure in
+RESEARCH_PARAMETERS §12.3 is therefore untouched.
+
+`doorAwareZones: false` restores the naive cabin-wide ordering. It is kept
+because the contrast is the clearest demonstration of what `doorSequencing`
+measures, and because every published zone scheme actually describes the naive
+version.
+
+### 4.2 Implemented strategies
 
 | key | Name | Description |
 |---|---|---|
@@ -455,6 +498,18 @@ Only doors with `boardable = true` may be enabled; asking to board through a
 service door or an overwing hatch is a configuration error, and so is enabling
 none. Enabled doors are processed in the roster's declaration order, never in
 the order the caller happened to list them.
+
+The three rules above live in **one** place, `aircraft.SeatDoorSplit`, and are
+imported by both the engine (which stamps `doorId`) and the boarding strategies
+(which need to know a passenger's door before they can order them relative to
+it — §4.1). Two copies that drifted apart would put a strategy's idea of a
+region and the engine's idea of a door out of step, and the resulting queue
+would be wrong in a way no single-engine test could see.
+
+Open seating is the exception and is handled separately: nobody has a seat yet,
+so the split is a queue quota proportional to each door's region capacity rather
+than a geometric partition. That quota is what stops two streams walking head-on
+down a single-file aisle.
 
 Each door has its own independent jetbridge queue. A passenger is released into
 the aisle when **both**:
@@ -658,6 +713,29 @@ Passengers with no assigned seat choose one on arriving at the cabin entrance:
 The choice happens at the moment the passenger crosses the door line, so it
 depends on who is already seated — which is exactly the real dynamic.
 
+**What these four policies do not model, and what that costs.** Every one of
+them chooses on **position or spacing alone**. None models *interference*
+avoidance — declining a seat because it means climbing over a stranger, or
+because it will make a stranger climb over you — which is the self-selection
+usually credited with making open seating quick, and which would produce
+window-first filling for free.
+
+The consequence is visible and it is not a bug: `open_seating` is the slowest
+strategy in the model on every aircraft. `front_first` is the extreme case at
+3.37× random on a single-door a320neo, and the mechanism is real rather than an
+artefact — if everyone takes the first free seat, the free frontier is one row
+wide, the passenger stowing is always standing exactly where the next passenger
+must walk, and the boarding serialises completely. `avoid_neighbours` (the
+shipped default) avoids that and pays for it in walking, landing at 1.46×.
+
+Adding an interference-avoiding policy needs a source for how real passengers
+trade the two off, and no reachable paper publishes one, so it is recorded as a
+known limitation (RESEARCH_PARAMETERS §12.2) rather than guessed at. One
+plausible-looking repair was measured and rejected: reserving a seat for spacing
+purposes when it is *chosen* rather than when it is *sat in* — which removes the
+opening phase in which nobody is seated yet and every arrival therefore ties —
+makes `avoid_neighbours` worse, 1.46× → 1.76×, not better.
+
 ---
 
 ## 7. Metrics
@@ -668,7 +746,7 @@ RunResult {
   strategy, aircraftId, seed, paxCount, seatCount, loadFactor,
   seatedCurve:     [{t, seated}],          // sampled every `sampleInterval` s
   aisleOccupancy:  [{t, count}],
-  congestion:      number[][],             // [rowSlot][timeBucket] mean bodies in aisle
+  congestion:      number[][],             // [rowSlot][timeBucket] integer body count
   perPassenger: [{
       id, seat, row, letter, depth, tier, groupLabel, doorId, bags, party,
       enterTime, sitTime, timeInAisle, walkTime, stowTime, shuffleTime, blockedTime,
@@ -676,7 +754,7 @@ RunResult {
   }],
   timeBreakdown: {walk, stow, shuffle, blocked},   // pax-seconds, summed
   interference: {none, one, two, sameParty},        // counts
-  gateChecks, binSearches,
+  gateChecks, binSearches, gateCheckRate,           // rate = gateChecks/paxCount
   aisleBlockEvents,
   p50AisleSeconds, p90AisleSeconds, maxAisleSeconds,
   p50BoardingWaitSeconds, p90BoardingWaitSeconds,
@@ -722,10 +800,27 @@ Notes on a few fields that are easy to read the wrong way:
   passenger's party, else `one` or `two`. The four buckets sum to `paxCount`.
 - **`aisleBlockEvents`** counts *episodes*, not ticks: it increments when a
   walker transitions from unobstructed to obstructed.
-- **`congestion`** is sampled at `sampleInterval`, not accumulated every tick.
-  Per-tick accumulation would mean an O(occupants) row lookup on every step for
-  a figure that is only ever plotted; sampling is an unbiased estimator of the
-  same quantity and keeps a 350-passenger run under a second.
+- **`congestion`** is an **instantaneous count of bodies in the aisle in that
+  row slot**, sampled at `sampleInterval` -- not a mean over the interval, and
+  the field was described as "mean bodies in aisle" for longer than it should
+  have been. Per-tick accumulation would mean an O(occupants) row lookup on
+  every step for a figure that is only ever plotted; sampling is an unbiased
+  estimator of the mean and keeps a 350-passenger run under a second. The
+  averaging that does happen is across REPLICATIONS, in `BatchResult`.
+
+  The values are **integers**. Python used to store them as floats, so it
+  serialised `0.0` where JavaScript serialised `0` and the replay JSON was not
+  byte-comparable between the two engines even though every value agreed.
+
+  **`congestion` is one sample SHORTER than `seatedCurve` and `aisleOccupancy`,
+  deliberately.** Those two get a closing sample at the true end time so a plot
+  closes on the real boarding time, and they carry an explicit `t` with every
+  point, so an off-grid final point is well defined. `congestion` is a bare
+  matrix whose column index *is* the time axis: column k means
+  `k * sampleInterval`. Appending a closing sample taken at an arbitrary
+  fraction of an interval would put a column on the heatmap that does not mean
+  what every other column means. The run is over at that point and the aisle is
+  empty, so nothing is lost.
 - **`doorSequencing`** scores how well the boarding order suits the doors. Per
   door it is the mean distance-from-door of the first half of that door's queue
   minus that of the second half, over the cabin length: positive means the far
@@ -744,6 +839,33 @@ Notes on a few fields that are easy to read the wrong way:
 `BatchResult` aggregates `n` runs per strategy: mean, sd, min, max, p05/p50/p95
 of `totalSeconds`, plus the per-run values for histograms and the pooled
 per-passenger distribution.
+
+**Confidence intervals use `t(n-1)`, not a flat 1.96.** 1.96 is the
+large-sample limit and this project routinely reports n = 5..25, where it
+understates the interval by 41.6% at n=5, 20.7% at n=8 and 12.3% at n=12,
+falling below 0.5% only past n≈50. A "95% interval" 40% too narrow changes which
+strategy comparisons read as significant, which is the one question the tool
+exists to answer. The critical-value table is shared with the charts so the same
+quantity cannot be drawn one way and reported another.
+
+### 7.1 Replay document
+
+Two fields are easy to misread, and both were being misread:
+
+- **`duration` is the span of the FRAME BUFFER, not the boarding time.**
+  `frames[i]` is the state at `i * frameInterval`. A run almost never ends
+  exactly on that grid, so the closing frame -- the terminal state, everybody
+  seated -- sits at the first grid point at or after the run end. Reporting
+  `totalSeconds` here put a scrubber's right edge one grid step *short* of that
+  frame, so the last thing a renderer could draw was a mid-interval frame with
+  somebody still shuffling in it while the status bar said all N were seated.
+  `result.totalSeconds` remains the boarding time and is what every statistic
+  is computed from; `duration` is within one frame interval of it.
+- **`partyId` and `partySize` are different numbers**, and the payload used to
+  emit the party's *index* under the name `party`. A renderer printing that as a
+  size reported "44 together" on an aircraft whose party sizes stop at 5. Both
+  are now spelled out; `party` is retained as a deprecated alias and carries the
+  SIZE, which is the quantity every consumer was already treating it as.
 
 ---
 
@@ -773,13 +895,25 @@ SimConfig {
   binSearchRadius, binSearchPenalty, gateCheckPenalty,
   binCongestionWeight,
   // order shaping
-  zoneCount, keepPartiesTogether, preboardFirst,
+  zoneCount, doorAwareZones, keepPartiesTogether, preboardFirst,
   nonComplianceRate, complianceJitter, lateRate,
   openSeatingPolicy,
   // engine
-  dt, sampleInterval,
+  dt,                         // seconds; 0 < dt <= MAX_DT (1.0)
+  sampleInterval,
 }
 ```
+
+**Rejected values.** The validator refuses scenarios that are not physically
+meaningful, not merely out of taste: a negative `stowWeibullScale` made boarding
+*faster* (a negative Weibull draw subtracts from the stow clock) and a `dt` of
+1e6 reported a 00:00 boarding because every passenger arrived, stowed and sat
+inside a single step. Both produced plausible-looking output from a meaningless
+scenario, which is the worst failure mode a validator can allow. `dt` is capped
+at `MAX_DT`; durations, standard deviations, penalties and rates must be
+non-negative; `walkSpeedMean`, `slowSpeedFactor` and `stowWeibullShape` must be
+strictly positive. Integer-keyed weight maps follow Python's `int()` exactly, so
+a key of `"1.0"` is rejected by both engines rather than by one.
 
 Every field has a documented default in `defaults`. Both implementations import
 their defaults from the **same JSON file** `parity/defaults.json` so they cannot
@@ -811,7 +945,7 @@ single draw against the same cumulative weights in each.
 canonical JSON digest:
 
 ```
-{ config_hash, totalSeconds, paxCount, seatCount, doors,
+{ config_hash, geometry_hash, totalSeconds, paxCount, seatCount, doors,
   timeBreakdown, interference, gateChecks, binSearches, aisleBlockEvents,
   seatedCurve (every 10s), first20SitTimes }
 ```
@@ -820,6 +954,17 @@ canonical JSON digest:
   (keys sorted, no whitespace). Fixture configs must therefore stick to plain
   JSON-round-trippable values — no exponents, no 17-digit floats — since the
   hash is over the *re-serialised* text, not the bytes on disk.
+- `geometry_hash` is FNV-1a/32 over every **rounded** value in
+  `geometry_payload` — cabin length, every row `x` and `pitch`, every seat `x`,
+  every door `x` — plus the identifiers that give them meaning. The digest used
+  to stop at the cabin door, so a disagreement between Python's `round(x, 6)`
+  and a hand-rolled `Math.round(v*1e6)/1e6` could ship undetected until an
+  airframe's pitch happened to land on a rounding tie. It is a **hash** rather
+  than a list of numbers precisely because the numeric comparison below has a
+  1e-6 tolerance and the disagreement being looked for is exactly 1e-6 wide.
+  Floats enter the hash as fixed-point `%.6f` text with `-0.0` normalised,
+  because Python prints an integral float as `1.0` and JavaScript prints it
+  as `1`.
 - `seatedCurve` is resampled onto a fixed **10 s** grid straight from the sit
   times, deliberately not from the engine's own sampled curve: `sampleInterval`
   is a presentation setting and must not leak into the parity contract.
@@ -828,3 +973,25 @@ canonical JSON digest:
 
 Floats are compared with `abs(a-b) <= 1e-6 * max(1,|a|)`.
 `npm run parity` / `make parity` runs both and diffs. **CI fails on any mismatch.**
+
+### 9.1 The full diff — what the digest does *not* prove
+
+The digest is a hash of a **summary**. It catches gross divergence and it runs
+in seconds, which is why it is the gate. It can also pass while individual
+per-passenger records differ, and those differences are exactly what later turns
+into a wrong chart.
+
+`python3 parity/compare.py --full` is the check that actually proves the port:
+
+* **16 strategies × 6 aircraft × 4 configurations = 384 scenarios**, each on its
+  own seed, covering one door and the aircraft's own door set, both
+  door-assignment policies, a full cabin and a light one, and the cabin-wide
+  zone fallback.
+* Complete `RunResult` documents compared **field by field with no tolerance at
+  all** — every per-passenger record, both curves, the congestion matrix, the
+  door statistics.
+
+The two emitters (`parity/emit_full_py.py`, `parity/emit_full_js.mjs`) stream
+NDJSON so the comparator diffs one scenario at a time; 384 complete results are
+tens of megabytes a side. It takes a few minutes. Run it before any release and
+after any change to the engine — `make parity` stays the fast gate.

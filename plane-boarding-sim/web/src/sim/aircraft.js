@@ -28,7 +28,7 @@
  */
 import ROSTER from '../../../parity/aircraft.json' with { type: 'json' }
 import { ConfigError, INCH } from './config.js'
-import { pyRound, sortByKey } from './pyutil.js'
+import { bisectLeft, pyRound, sortByKey } from './pyutil.js'
 
 export const AISLE = '|'
 
@@ -571,3 +571,61 @@ export function geometryPayload(ac) {
 }
 
 export { r4 }
+
+// ---------------------------------------------------------------------------
+// The assigned-seat door split (ENGINE_SPEC 5)
+// ---------------------------------------------------------------------------
+//
+// Lives here, rather than in the engine that applies it, because the boarding
+// STRATEGIES need the same partition: a spatially-ordered strategy has to know
+// which door a passenger will walk to before it can order them far-end-first
+// relative to it. Two copies of this rule that drifted apart would put the
+// strategy's idea of a region and the engine's idea of a door out of step, and
+// the resulting queue would be wrong in a way no single-engine test could see.
+
+/** Midpoints between consecutive doors, sorted fore to aft. */
+export function splitBoundaries(doors) {
+  const xs = doors.map((d) => d.x).sort((a, b) => a - b)
+  const out = []
+  for (let i = 0; i < xs.length - 1; i++) out.push((xs[i] + xs[i + 1]) * 0.5)
+  return out
+}
+
+export const doorForX = (doorsSorted, bounds, x) => doorsSorted[bisectLeft(bounds, x)]
+
+/**
+ * Which boarding door serves a given seat, for ASSIGNED seating.
+ *
+ * Open seating is deliberately not handled here: nobody has a seat yet, so the
+ * split is a queue quota rather than a geometric partition (see
+ * `engine.assignDoors`).
+ */
+export class SeatDoorSplit {
+  constructor(doors, assignment) {
+    this.doors = Array.from(doors)
+    this.single = this.doors.length === 1 || assignment === 'single'
+    this.assignment = assignment
+    this.byX = sortByKey(this.doors.slice(), (d) => d.x)
+    this.bounds = splitBoundaries(this.byX)
+    this.perAisle = new Map()
+    for (const d of this.byX) {
+      let list = this.perAisle.get(d.aisleIndex)
+      if (list === undefined) this.perAisle.set(d.aisleIndex, (list = []))
+      list.push(d)
+    }
+    this.aisleBounds = new Map()
+    for (const [k, v] of this.perAisle) {
+      if (v.length > 1) this.aisleBounds.set(k, splitBoundaries(v))
+    }
+  }
+
+  ofSeat(seat) {
+    if (this.single) return this.doors[0]
+    if (this.assignment === 'split_by_row') return doorForX(this.byX, this.bounds, seat.x)
+    // split_by_aisle: the door feeding your seat's aisle, ties broken by row.
+    const cand = this.perAisle.get(seat.aisleIndex)
+    if (!cand || !cand.length) return doorForX(this.byX, this.bounds, seat.x)
+    if (cand.length === 1) return cand[0]
+    return doorForX(cand, this.aisleBounds.get(seat.aisleIndex), seat.x)
+  }
+}

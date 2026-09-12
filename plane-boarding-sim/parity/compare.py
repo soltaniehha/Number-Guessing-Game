@@ -4,8 +4,22 @@
 Runs every fixture in `fixtures.json` through BOTH the Python engine and the
 JS engine, then diffs the canonical digests. Exits non-zero on any mismatch.
 
-    python3 parity/compare.py            # full run
-    python3 parity/compare.py --rng      # RNG vectors only (fast)
+    python3 parity/compare.py            # the fast gate: RNG vectors + digests
+    python3 parity/compare.py --rng      # RNG vectors only (fastest)
+    python3 parity/compare.py --full     # ...and the 384-scenario exact diff
+
+**What the default gate does and does not prove.** The digest is a hash of a
+SUMMARY -- totals, the time breakdown, interference counts, gate checks, bin
+searches, block events, a 10 s-grid seated curve, the first 20 sit times and the
+geometry fingerprint. It catches gross divergence and it runs in seconds, which
+is why it is the gate. It can also pass while individual per-passenger records
+differ, and those differences are exactly what later turns into a wrong chart.
+
+`--full` is the check that actually proved the port: 16 strategies x 6 aircraft
+x 4 configurations = 384 scenarios, comparing COMPLETE `RunResult` documents
+field by field -- every per-passenger record, both curves, the congestion
+matrix, the door statistics -- with no tolerance at all. It takes a few minutes.
+Run it before any release and after any change to the engine.
 """
 import json
 import os
@@ -27,7 +41,22 @@ def close(a, b):
     return a == b
 
 
-def diff(a, b, path=""):
+def exact(a, b):
+    """Bit-for-bit, with no tolerance.
+
+    `int` and `float` still compare numerically, because the two languages
+    disagree only about how they SPELL an integral value -- Python writes `0.0`
+    where JavaScript writes `0` -- and that is a JSON serialisation difference,
+    not an engine one. Everything else must be identical.
+    """
+    if isinstance(a, bool) or isinstance(b, bool):
+        return a is b or a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return a == b
+    return a == b
+
+
+def diff(a, b, path="", eq=close):
     """Yield human-readable difference paths between two JSON structures."""
     if isinstance(a, dict) and isinstance(b, dict):
         for k in sorted(set(a) | set(b)):
@@ -36,13 +65,13 @@ def diff(a, b, path=""):
             elif k not in b:
                 yield f"{path}.{k}: missing in js"
             else:
-                yield from diff(a[k], b[k], f"{path}.{k}")
+                yield from diff(a[k], b[k], f"{path}.{k}", eq)
     elif isinstance(a, list) and isinstance(b, list):
         if len(a) != len(b):
             yield f"{path}: length {len(a)} (py) != {len(b)} (js)"
         for i, (x, y) in enumerate(zip(a, b)):
-            yield from diff(x, y, f"{path}[{i}]")
-    elif not close(a, b):
+            yield from diff(x, y, f"{path}[{i}]", eq)
+    elif not eq(a, b):
         yield f"{path}: {a!r} (py) != {b!r} (js)"
 
 
@@ -70,12 +99,79 @@ def section(name, py_cmd, js_cmd):
     return True
 
 
+def _stream(cmd, cwd):
+    """Run an NDJSON emitter and yield its scenarios one at a time.
+
+    Streamed rather than collected because 384 complete `RunResult` documents
+    are tens of megabytes per side, and holding both in memory to compare them
+    is the one part of this that does not need to scale.
+    """
+    proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, bufsize=1)
+    for line in proc.stdout:
+        line = line.strip()
+        if line:
+            yield json.loads(line)
+    proc.stdout.close()
+    err = proc.stderr.read()
+    proc.stderr.close()
+    if proc.wait() != 0:
+        print(f"{RED}command failed:{RESET} {' '.join(cmd)}\n{err}", file=sys.stderr)
+        sys.exit(2)
+
+
+def full_section():
+    """The 384-scenario exact-equality diff over COMPLETE RunResults.
+
+    No tolerance: the two engines are required to be bit-identical, and a
+    tolerance here would quietly permit exactly the drift this exists to catch.
+    """
+    py = _stream(["python3", "parity/emit_full_py.py"], ROOT)
+    js = _stream(["node", "parity/emit_full_js.mjs"], ROOT)
+    n = 0
+    bad = 0
+    shown = 0
+    for a, b in zip(py, js):
+        n += 1
+        if a["name"] != b["name"]:
+            print(f"{RED}FAIL{RESET}  full: scenario {n} is {a['name']!r} (py) "
+                  f"but {b['name']!r} (js) -- the two matrices have diverged")
+            return False
+        diffs = list(diff(a["result"], b["result"], a["name"], exact))
+        if diffs:
+            bad += 1
+            if shown < 5:
+                shown += 1
+                print(f"{RED}FAIL{RESET}  {a['name']}  ({len(diffs)} difference(s))")
+                for d in diffs[:10]:
+                    print(f"        {d}")
+                if len(diffs) > 10:
+                    print(f"        {DIM}... and {len(diffs) - 10} more{RESET}")
+        elif n % 32 == 0:
+            print(f"{DIM}      {n} scenarios identical so far...{RESET}")
+    leftover = sum(1 for _ in py) + sum(1 for _ in js)
+    if leftover:
+        print(f"{RED}FAIL{RESET}  full: the two emitters produced different scenario counts")
+        return False
+    if bad:
+        print(f"{RED}FAIL{RESET}  full  ({bad} of {n} scenarios differ)")
+        return False
+    print(f"{GREEN}PASS{RESET}  full  {DIM}({n} scenarios, complete RunResults "
+          f"identical field for field){RESET}")
+    return True
+
+
 def main():
     only_rng = "--rng" in sys.argv
+    want_full = "--full" in sys.argv
     print(f"\n{'=' * 62}\n Cross-language parity: Python engine  vs  JavaScript engine\n{'=' * 62}")
     ok = section("rng", ["python3", "parity/rng_vectors.py"], ["node", "parity/rng_vectors.mjs"])
     if not only_rng:
         ok &= section("engine", ["python3", "parity/emit_py.py"], ["node", "parity/emit_js.mjs"])
+    if want_full:
+        print(f"{DIM}      running the 384-scenario exact diff; this takes a few "
+              f"minutes{RESET}")
+        ok &= full_section()
     print("=" * 62)
     if ok:
         print(f"{GREEN}All parity checks passed.{RESET} Both engines are behaviourally identical.\n")

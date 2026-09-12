@@ -8,6 +8,7 @@ import { simulate } from '../../src/sim/engine.js'
 import { generate } from '../../src/sim/passengers.js'
 import { PCG32 } from '../../src/sim/rng.js'
 import { STRATEGIES, weibullMeanFactor } from '../../src/sim/strategies.js'
+import { SeatDoorSplit } from '../../src/sim/aircraft.js'
 import { runBatch } from '../../src/sim/batch.js'
 import { cfgFor, cleanCfg, makeQueue } from './helpers.js'
 
@@ -53,7 +54,12 @@ it('wilma puts all windows before all middles before all aisles', () => {
 it('steffen_perfect alternates rows within each wave', () => {
   // Consecutive boarders in a wave must be two row slots apart -- that is the
   // entire mechanism, and it is what lets a whole wave stow simultaneously.
-  const { queue } = makeQueue(cleanCfg('a320neo', 'steffen_perfect', 3))
+  //
+  // Stated through ONE door, where a wave is a single rear-to-front run. With
+  // two doors a wave interleaves the two door regions (asserted separately
+  // below), so the slots are not monotone across the whole cabin and would not
+  // be expected to be -- each door still sees its own alternating run.
+  const { queue } = makeQueue(cleanCfg('a320neo', 'steffen_perfect', 3, { doors: ['1L'] }))
   const waves = new Map()
   for (const p of queue) {
     let list = waves.get(p.groupLabel)
@@ -78,14 +84,16 @@ it('steffen_perfect alternates rows within each wave', () => {
 })
 
 it('back_to_front really is rear first', () => {
-  const { queue } = makeQueue(cleanCfg('a320neo', 'back_to_front', 3))
+  // Through ONE door, where "rear" and "far from the door" are the same thing.
+  // The two-door meaning is asserted separately, below.
+  const { queue } = makeQueue(cleanCfg('a320neo', 'back_to_front', 3, { doors: ['1L'] }))
   const first = queue.slice(0, 20).map((p) => p.rowSlot)
   const last = queue.slice(-20).map((p) => p.rowSlot)
   expect(Math.min(...first)).toBeGreaterThan(Math.max(...last))
 })
 
 it('front_to_back really is front first', () => {
-  const { queue } = makeQueue(cleanCfg('a320neo', 'front_to_back', 3))
+  const { queue } = makeQueue(cleanCfg('a320neo', 'front_to_back', 3, { doors: ['1L'] }))
   const first = queue.slice(0, 20).map((p) => p.rowSlot)
   const last = queue.slice(-20).map((p) => p.rowSlot)
   expect(Math.max(...first)).toBeLessThan(Math.min(...last))
@@ -117,7 +125,11 @@ it('reverse_pyramid is a diagonal, not a row sweep', () => {
 })
 
 it('rotating_zone alternates the two ends of the cabin', () => {
-  const { queue } = makeQueue(cleanCfg('a320neo', 'rotating_zone', 3, { zoneCount: 4 }))
+  // Through ONE door, where the two ends of the cabin and the two ends of the
+  // door's region are the same pair of ends.
+  const { queue } = makeQueue(
+    cleanCfg('a320neo', 'rotating_zone', 3, { zoneCount: 4, doors: ['1L'] }),
+  )
   const seen = []
   for (const p of queue) if (!seen.length || seen[seen.length - 1] !== p.groupLabel) seen.push(p.groupLabel)
   const means = seen.map((label) =>
@@ -490,4 +502,101 @@ it('rejects an unknown strategy clearly', () => {
   expect(() => simulate(cfgFor('a320neo', 'random', 1).replace({ strategy: 'teleport' }))).toThrow(
     ConfigError,
   )
+})
+
+// ---------------------------------------------------------------------------
+// Door-aware spatial ordering
+// ---------------------------------------------------------------------------
+
+const doorOf = (ac, cfg, p) =>
+  new SeatDoorSplit(ac.resolveDoors(cfg.doors), cfg.doorAssignment).ofSeat(p.seat)
+
+const meanDistanceFromDoor = (ac, cfg, group) =>
+  meanOf(group.map((p) => Math.abs(p.seat.x - doorOf(ac, cfg, p).x)))
+
+// Every strategy whose queue is ordered by position along the cabin. Steffen is
+// absent on purpose: its outer loop is side x parity x depth and each WAVE
+// sweeps far-to-near independently, so the queue as a whole is spatially flat by
+// construction. Its own far-end-first property is asserted per wave, below.
+const DOOR_AWARE_SPATIAL = [
+  'back_to_front',
+  'block_boarding',
+  'wilma_zoned',
+  'reverse_pyramid',
+  'common_sense_5tier',
+  'southwest_2026',
+  'rotating_zone',
+]
+
+it.each(DOOR_AWARE_SPATIAL)('boards %s far from its own door first', (strategy) => {
+  // The two-door meaning of "rear first". A cabin-wide rear-first order is
+  // far-end-first at the forward door and NEAR-end-first at the aft one, which
+  // is the front-to-back pathology at half the aircraft. Every strategy with a
+  // spatial component must instead work outward from the far end of ITS OWN
+  // door's region.
+  const cfg = cleanCfg('a320neo', strategy, 3, { doors: ['1L', '2L'] })
+  const { ac, queue } = makeQueue(cfg)
+  const byDoor = new Map()
+  for (const p of queue) {
+    const did = doorOf(ac, cfg, p).id
+    let list = byDoor.get(did)
+    if (list === undefined) byDoor.set(did, (list = []))
+    list.push(p)
+  }
+  expect(byDoor.size, 'this test needs both doors to be used').toBe(2)
+  for (const [did, group] of byDoor) {
+    const half = Math.floor(group.length / 2)
+    const early = meanDistanceFromDoor(ac, cfg, group.slice(0, half))
+    const late = meanDistanceFromDoor(ac, cfg, group.slice(half))
+    expect(
+      early,
+      `${strategy}: at door ${did} the first half of the queue averages ` +
+        `${early.toFixed(1)} m from the door and the second half ${late.toFixed(1)} m ` +
+        `-- that is near-end-first, the front-to-back pathology`,
+    ).toBeGreaterThan(late)
+  }
+})
+
+it('keeps the cabin-wide fallback producing the documented pathology', () => {
+  // `doorAwareZones: false` is kept deliberately, because the contrast is what
+  // makes the point. It must therefore still be wrong in the documented way.
+  const cfg = cleanCfg('a320neo', 'back_to_front', 3, {
+    doors: ['1L', '2L'],
+    doorAwareZones: false,
+  })
+  const { ac, queue } = makeQueue(cfg)
+  const aft = queue.filter((p) => doorOf(ac, cfg, p).id === '2L')
+  const half = Math.floor(aft.length / 2)
+  expect(meanDistanceFromDoor(ac, cfg, aft.slice(0, half))).toBeLessThan(
+    meanDistanceFromDoor(ac, cfg, aft.slice(half)),
+  )
+})
+
+it('runs each steffen_perfect wave far-end-first within its door region', () => {
+  const cfg = cleanCfg('a320neo', 'steffen_perfect', 3, { doors: ['1L', '2L'] })
+  const { ac, queue } = makeQueue(cfg)
+  const waves = new Map()
+  for (const p of queue) {
+    const key = `${p.groupLabel}|${doorOf(ac, cfg, p).id}`
+    let list = waves.get(key)
+    if (list === undefined) waves.set(key, (list = []))
+    list.push(p)
+  }
+  let checked = 0
+  for (const [key, members] of waves) {
+    if (members.length < 3) continue
+    checked += 1
+    const doorX = doorOf(ac, cfg, members[0]).x
+    const dists = members.map((p) => Math.abs(p.seat.x - doorX))
+    expect(dists, `${key} does not run far-end-first`).toEqual(
+      [...dists].sort((a, b) => b - a),
+    )
+    const slots = members.map((p) => p.rowSlot)
+    for (let i = 1; i < slots.length; i++) {
+      const gap = Math.abs(slots[i - 1] - slots[i])
+      expect(gap, `${key}: rows must still alternate`).toBeGreaterThanOrEqual(2)
+      expect(gap % 2).toBe(0)
+    }
+  }
+  expect(checked).toBeGreaterThanOrEqual(8)
 })

@@ -25,7 +25,7 @@
  *   both-blocked-window 9. Even an unobstructed passenger pays 1 movement just
  *   to sit down.
  */
-import { getAircraft } from './aircraft.js'
+import { SeatDoorSplit, doorForX, getAircraft, splitBoundaries } from './aircraft.js'
 import {
   BODY_DEPTH,
   ConfigError,
@@ -71,16 +71,6 @@ const pack = (a, b) => a * 64 + b
 // Door assignment (ENGINE_SPEC 5)
 // ---------------------------------------------------------------------------
 
-/** Midpoints between consecutive doors, sorted fore to aft. */
-function splitBoundaries(doors) {
-  const xs = doors.map((d) => d.x).sort((a, b) => a - b)
-  const out = []
-  for (let i = 0; i < xs.length - 1; i++) out.push((xs[i] + xs[i + 1]) * 0.5)
-  return out
-}
-
-const doorForX = (doorsSorted, bounds, x) => doorsSorted[bisectLeft(bounds, x)]
-
 /** Stamp `doorId` on every passenger. */
 export function assignDoors(queue, ac, doors, cfg, openSeating) {
   if (doors.length === 1 || cfg.doorAssignment === 'single') {
@@ -116,31 +106,11 @@ export function assignDoors(queue, ac, doors, cfg, openSeating) {
     return
   }
 
-  const byX = sortByKey(doors.slice(), (d) => d.x)
-  const bounds = splitBoundaries(byX)
-
-  if (cfg.doorAssignment === 'split_by_row') {
-    for (const p of queue) p.doorId = doorForX(byX, bounds, p.seat.x).id
-    return
-  }
-
-  // split_by_aisle: use the door feeding your seat's aisle, ties broken by row.
-  const perAisle = new Map()
-  for (const d of byX) {
-    let list = perAisle.get(d.aisleIndex)
-    if (list === undefined) {
-      list = []
-      perAisle.set(d.aisleIndex, list)
-    }
-    list.push(d)
-  }
-  const fallbackBounds = bounds
-  for (const p of queue) {
-    const cand = perAisle.get(p.seat.aisleIndex)
-    if (!cand || !cand.length) p.doorId = doorForX(byX, fallbackBounds, p.seat.x).id
-    else if (cand.length === 1) p.doorId = cand[0].id
-    else p.doorId = doorForX(cand, splitBoundaries(cand), p.seat.x).id
-  }
+  // The geometric split, shared with the boarding strategies so that a
+  // door-aware ordering and the engine cannot disagree about which door a
+  // passenger walks to. See `aircraft.SeatDoorSplit`.
+  const split = new SeatDoorSplit(doors, cfg.doorAssignment)
+  for (const p of queue) p.doorId = split.ofSeat(p.seat).id
 }
 
 /**

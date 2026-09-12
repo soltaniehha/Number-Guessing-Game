@@ -82,8 +82,12 @@ function sectionBadge(sectionId, config, aircraft) {
   switch (sectionId) {
     case 'scenario':
       return `${Math.round((config.loadFactor || 0) * 100)}%`
-    case 'doors':
-      return `${(config.doors || []).length}/${(aircraft?.doors || []).length}`
+    case 'doors': {
+      // Boarding doors only: the badge counts what the picker offers, not the
+      // service doors and overwing exits nobody can board through.
+      const boardable = (aircraft?.doors || []).filter((d) => d.boardable !== false).length
+      return `${(config.doors || []).length}/${boardable}`
+    }
     case 'behaviour':
       return `${Math.round((config.nonComplianceRate || 0) * 100)}%`
     default:

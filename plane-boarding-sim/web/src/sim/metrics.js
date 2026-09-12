@@ -6,6 +6,35 @@
 import { pySum } from './pyutil.js'
 
 /**
+ * Two-sided 95% t critical values for df = 1..30. Above 30 the normal
+ * approximation is within 0.5% and 1.96 is used.
+ */
+const T95 = [
+  12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228,
+  2.201, 2.179, 2.16, 2.145, 2.131, 2.12, 2.11, 2.101, 2.093, 2.086,
+  2.08, 2.074, 2.069, 2.064, 2.06, 2.056, 2.052, 2.048, 2.045, 2.042,
+]
+
+/**
+ * Two-sided 95% critical value for `df` degrees of freedom.
+ *
+ * A flat 1.96 is the LARGE-SAMPLE limit, and this project routinely reports
+ * n = 5..25: at n=5 it understates the interval by 41.6%, at n=8 by 20.7%, at
+ * n=12 by 12.3%, and only past n≈50 does the gap fall below 0.5%. Reporting a
+ * "95% interval" that is 40% too narrow is not a rounding difference -- it
+ * changes which strategy comparisons read as significant, which is the one
+ * question this tool exists to answer.
+ *
+ * The same table `charts/primitives/stats.js` uses, so a number drawn on a
+ * chart and the same number in a batch result agree.
+ */
+export function tCritical95(df) {
+  if (!Number.isFinite(df) || df < 1) return NaN
+  return df <= 30 ? T95[df - 1] : 1.96
+}
+
+
+/**
  * Linear-interpolated percentile on an already-sorted sequence.
  *
  * Spelled out rather than delegated because the Python engine reproduces it
@@ -58,7 +87,7 @@ export class Aggregate {
   /** Half-width of the 95% confidence interval on the mean. */
   get ci95() {
     if (this.n < 2) return 0.0
-    return (1.96 * this.sd) / Math.sqrt(this.n)
+    return (tCritical95(this.n - 1) * this.sd) / Math.sqrt(this.n)
   }
 
   toDict(keepValues = false) {
@@ -149,5 +178,5 @@ function meanSdCi(values) {
   const squares = values.map((v) => (v - mean) ** 2)
   const variance = pySum(squares) / (n - 1)
   const sd = Math.sqrt(variance)
-  return [mean, sd, (1.96 * sd) / Math.sqrt(n)]
+  return [mean, sd, (tCritical95(n - 1) * sd) / Math.sqrt(n)]
 }

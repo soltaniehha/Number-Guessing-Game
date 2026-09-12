@@ -17,7 +17,7 @@
  * Party cohesion alone is the single largest reason a perfect Steffen ordering
  * does not deliver its theoretical 2x in the field.
  */
-import { AISLE_SEAT, MIDDLE, WINDOW } from './aircraft.js'
+import { AISLE_SEAT, MIDDLE, SeatDoorSplit, WINDOW } from './aircraft.js'
 import {
   SERVICE_PHASE_BEHAVIOUR,
   SERVICE_STREAM_BASE,
@@ -89,6 +89,133 @@ function bandOf(slot, bandList) {
   return bandList.length - 1
 }
 
+/**
+ * Where a passenger sits, measured from the door they will actually use.
+ *
+ * Port of `_Spatial` in `python/plane_boarding/strategies.py`.
+ *
+ * Every spatially-ordered strategy in this file used to measure position as
+ * `rowSlot`: bigger = further aft = board earlier. That is right for one forward
+ * door and WRONG the moment a second door opens, because a cabin-wide rear-first
+ * order is far-end-first at 1L and **near-end-first at 2L** -- and near-end-first
+ * is the front-to-back pathology in miniature. The `doorSequencing` metric
+ * (ENGINE_SPEC 7) was built to measure exactly that, and it was scoring the
+ * headline strategy badly at the aft door: on the shipped two-door a320neo
+ * default, `common_sense_5tier` came out SLOWER than a free-for-all while
+ * beating it comfortably through one door.
+ *
+ * So position is measured per DOOR REGION instead. The cabin is split between
+ * the boarding doors by the same rule the engine uses to assign them
+ * (`aircraft.SeatDoorSplit`, ENGINE_SPEC 5 -- shared code, so the strategy's idea
+ * of a region and the engine's idea of a door cannot drift). Within each region a
+ * passenger's rank runs from the far end of that region toward its door, bands
+ * are cut inside the region, and band k of EVERY region is called together so
+ * both doors are fed at once.
+ *
+ * With a single boarding door -- or `doorAssignment: 'single'`, or
+ * `doorAwareZones: false` -- there is one region spanning the whole cabin and
+ * every method below takes the old cabin-wide code path verbatim, so single-door
+ * results are bit-identical to what they were.
+ */
+class Spatial {
+  constructor(ac, cfg) {
+    this.bandList = bands(ac, cfg.zoneCount)
+    this.nBands = this.bandList.length
+    this.nRows = Math.max(1, ac.rowSlots.length - 1)
+    const doors = ac.resolveDoors(cfg.doors)
+    this.single =
+      !cfg.doorAwareZones || doors.length === 1 || cfg.doorAssignment === 'single'
+    if (this.single) return
+
+    const split = new SeatDoorSplit(doors, cfg.doorAssignment)
+    const doorX = new Map(doors.map((d) => [d.id, d.x]))
+    const order = new Map(doors.map((d, i) => [d.id, i]))
+
+    // Which region each ROW SLOT belongs to, decided by the seats in it: a row
+    // goes to whichever door serves most of its seats, ties to the lower door
+    // index, so a row is never split across two zone schemes.
+    const votes = new Map()
+    for (const seat of ac.seats) {
+      let tally = votes.get(seat.rowSlot)
+      if (tally === undefined) votes.set(seat.rowSlot, (tally = new Map()))
+      const did = split.ofSeat(seat).id
+      tally.set(did, (tally.get(did) || 0) + 1)
+    }
+    const byRegion = new Map()
+    for (const [slot, tally] of votes) {
+      let best = null
+      for (const [did, n] of tally) {
+        if (best === null || n > tally.get(best) || (n === tally.get(best) && order.get(did) < order.get(best))) {
+          best = did
+        }
+      }
+      let list = byRegion.get(best)
+      if (list === undefined) byRegion.set(best, (list = []))
+      list.push(slot)
+    }
+
+    // Within each region, rank the slots by distance from that region's door,
+    // FARTHEST FIRST. `-x` breaks a distance tie deterministically.
+    this.call = new Map()
+    this.fracBySlot = new Map()
+    this.rank = new Map()
+    this.far = new Map()
+    const econ = new Set(ac.economyRowSlots)
+    for (const [did, slots] of byRegion) {
+      const dx = doorX.get(did)
+      sortByTuple(slots, (sl) => [-Math.abs(ac.rowSlots[sl].x - dx), -ac.rowSlots[sl].x])
+      const m = slots.length
+      const span = Math.max(1, m - 1)
+      for (let i = 0; i < m; i++) {
+        const sl = slots[i]
+        this.rank.set(sl, i)
+        this.call.set(sl, floorDiv(i * this.nBands, m))
+        this.fracBySlot.set(sl, (m - 1 - i) / span)
+      }
+      // "Far half" for the five-tier scheme: the far half of the ECONOMY rows of
+      // this region, mirroring the cabin-wide `rowSlot >= mid`.
+      const eco = slots.filter((sl) => econ.has(sl))
+      const cut = floorDiv(eco.length, 2)
+      const farSet = new Set(cut ? eco.slice(0, cut) : eco)
+      for (const sl of slots) this.far.set(sl, farSet.has(sl))
+    }
+  }
+
+  /** Band index in CALL order under a far-end-first scheme: 0 boards first. */
+  callIndex(p) {
+    if (this.single) return this.nBands - 1 - bandOf(p.rowSlot, this.bandList)
+    return this.call.get(p.rowSlot)
+  }
+
+  /**
+   * 0 at the passenger's own door, 1 at the far end of their region. In the
+   * single-region case this is `rowSlot / (nRows - 1)`, i.e. distance from the
+   * nose, exactly as `reverse_pyramid` computed it before.
+   */
+  frac(p) {
+    if (this.single) return p.rowSlot / this.nRows
+    return this.fracBySlot.get(p.rowSlot)
+  }
+
+  /**
+   * Sort key that puts the far end of the region first. Replaces `-p.rowSlot`,
+   * and IS `-p.rowSlot` in the single-region case.
+   */
+  distKey(p) {
+    if (this.single) return -p.rowSlot
+    return this.rank.get(p.rowSlot)
+  }
+
+  /**
+   * Is this passenger in the far half of their region's economy rows? `mid` is
+   * the cabin-wide median slot, used in the single-region case.
+   */
+  isFarHalf(p, mid) {
+    if (this.single) return p.rowSlot >= mid
+    return this.far.get(p.rowSlot)
+  }
+}
+
 function label(pax, text) {
   for (const p of pax) p.groupLabel = text
   return Array.from(pax)
@@ -118,17 +245,26 @@ function stratRandom(pax, ac, cfg, rng) {
   return label(shuffled(rng, pax), 'Free-for-all')
 }
 
+/**
+ * Contiguous bands, far end of each door's region first (or nearest first).
+ *
+ * Buckets are indexed by CALL position rather than by physical band, which is
+ * what lets the same loop serve one door and two: with one door the call order
+ * is rear-to-front, with two it is middle-outward, and `Spatial` is the only
+ * thing that knows the difference.
+ */
 function zoned(pax, ac, cfg, rng, rearFirst) {
-  const bandList = bands(ac, cfg.zoneCount)
-  const buckets = bandList.map(() => [])
-  for (const p of pax) buckets[bandOf(p.rowSlot, bandList)].push(p)
-  const order = []
-  if (rearFirst) for (let i = bandList.length - 1; i >= 0; i--) order.push(i)
-  else for (let i = 0; i < bandList.length; i++) order.push(i)
+  const sp = new Spatial(ac, cfg)
+  const n = sp.nBands
+  const buckets = []
+  for (let i = 0; i < n; i++) buckets.push([])
+  for (const p of pax) {
+    const k = sp.callIndex(p)
+    buckets[rearFirst ? k : n - 1 - k].push(p)
+  }
   const out = []
-  for (let n = 0; n < order.length; n++) {
-    const bucket = label(shuffled(rng, buckets[order[n]]), zoneLabel(n, bandList.length))
-    for (const p of bucket) out.push(p)
+  for (let i = 0; i < n; i++) {
+    for (const p of label(shuffled(rng, buckets[i]), zoneLabel(i, n))) out.push(p)
   }
   return out
 }
@@ -167,15 +303,13 @@ function stratWilma(pax, ac, cfg, rng) {
  * while spreading the aisle load, which plain WilMA does not do at all.
  */
 function stratWilmaZoned(pax, ac, cfg, rng) {
-  const bandList = bands(ac, cfg.zoneCount)
+  const sp = new Spatial(ac, cfg)
   const out = []
   for (let d = ac.maxDepth; d > 0; d--) {
     const atDepth = pax.filter((p) => p.depth === d)
-    let n = 0
-    for (let bi = bandList.length - 1; bi >= 0; bi--, n++) {
-      const [lo, hi] = bandList[bi]
-      const bucket = shuffled(rng, atDepth.filter((p) => lo <= p.rowSlot && p.rowSlot < hi))
-      for (const p of bucket) p.groupLabel = `${depthLabel(p)} ${zoneLabel(n, bandList.length)}`
+    for (let n = 0; n < sp.nBands; n++) {
+      const bucket = shuffled(rng, atDepth.filter((p) => sp.callIndex(p) === n))
+      for (const p of bucket) p.groupLabel = `${depthLabel(p)} ${zoneLabel(n, sp.nBands)}`
       for (const p of bucket) out.push(p)
     }
   }
@@ -198,8 +332,9 @@ function stratWilmaZoned(pax, ac, cfg, rng) {
  * it), so a 3-4-3 has four sides and produces 8*maxDepth waves rather than 4.
  */
 // Every strategy is called as `fn(pax, ac, cfg, rng)`; this one is the sole
-// deterministic ordering in the set and needs neither the config nor the RNG.
-function stratSteffenPerfect(pax, ac) {
+// deterministic ordering in the set and needs no RNG.
+function stratSteffenPerfect(pax, ac, cfg) {
+  const sp = new Spatial(ac, cfg)
   const out = []
   let nGroups = 0
   for (let side = 0; side < ac.blockCount; side++) {
@@ -209,7 +344,10 @@ function stratSteffenPerfect(pax, ac) {
           (p) => p.seat.blockId === side && p.rowSlot % 2 === parity && p.depth === d,
         )
         if (!bucket.length) continue
-        sortByKey(bucket, (p) => -p.rowSlot)
+        // Row PARITY stays physical -- "two rows apart" is a fact about the
+        // cabin, not about the door -- but the order within a wave runs from the
+        // far end of each door's region toward its door.
+        sortByKey(bucket, (p) => sp.distKey(p))
         nGroups += 1
         for (const p of label(bucket, `Wave ${nGroups}`)) out.push(p)
       }
@@ -252,7 +390,7 @@ function stratSteffenModified(pax, ac, cfg, rng) {
  * measured a ~20% saving from it in revenue service.
  */
 function stratReversePyramid(pax, ac, cfg, rng) {
-  const nRows = Math.max(1, ac.rowSlots.length - 1)
+  const sp = new Spatial(ac, cfg)
   const nDepth = Math.max(1, ac.maxDepth - 1)
 
   // Weight the two terms so that ONE depth step is worth exactly ONE full sweep
@@ -263,10 +401,11 @@ function stratReversePyramid(pax, ac, cfg, rng) {
   const wDepth = nDepth / (nDepth + 1.0)
   const wRow = 1.0 - wDepth
 
-  // Both terms run 0..1 with HIGHER = board earlier, so the row term is
-  // distance from the FRONT: the rearmost row scores 1.
+  // Both terms run 0..1 with HIGHER = board earlier. The row term is distance
+  // from the passenger's own DOOR, which with one door is distance from the nose
+  // and the rearmost row scoring 1, exactly as before.
   const score = (p) => {
-    const rowTerm = p.rowSlot / nRows
+    const rowTerm = sp.frac(p)
     const depthTerm = (p.depth - 1) / nDepth
     return wRow * rowTerm + wDepth * depthTerm
   }
@@ -296,23 +435,26 @@ function stratReversePyramid(pax, ac, cfg, rng) {
  * instead of one queueing behind the other.
  */
 function stratRotatingZone(pax, ac, cfg, rng) {
-  const bandList = bands(ac, cfg.zoneCount)
-  const buckets = bandList.map(() => [])
-  for (const p of pax) buckets[bandOf(p.rowSlot, bandList)].push(p)
+  const sp = new Spatial(ac, cfg)
+  const n = sp.nBands
+  // Indexed by CALL position, 0 = the far end of the region: the alternation is
+  // then between the two ends of each door's own stretch of aisle, which is what
+  // the method is for, rather than between the two ends of the cabin.
+  const buckets = []
+  for (let i = 0; i < n; i++) buckets.push([])
+  for (const p of pax) buckets[sp.callIndex(p)].push(p)
   const order = []
-  let lo = 0
-  let hi = bandList.length - 1
-  while (lo <= hi) {
-    order.push(hi)
-    if (lo !== hi) order.push(lo)
-    lo += 1
-    hi -= 1
+  let far = 0
+  let near = n - 1
+  while (far <= near) {
+    order.push(far)
+    if (far !== near) order.push(near)
+    far += 1
+    near -= 1
   }
   const out = []
-  for (let n = 0; n < order.length; n++) {
-    for (const p of label(shuffled(rng, buckets[order[n]]), zoneLabel(n, bandList.length))) {
-      out.push(p)
-    }
+  for (let i = 0; i < order.length; i++) {
+    for (const p of label(shuffled(rng, buckets[order[i]]), zoneLabel(i, n))) out.push(p)
   }
   return out
 }
@@ -325,12 +467,12 @@ function stratBlockBoarding(pax, ac, cfg, rng) {
   const premium = pax.filter((p) => p.seat.classKey !== 'economy')
   const rest = pax.filter((p) => p.seat.classKey === 'economy')
   const out = label(shuffled(rng, premium), 'Premium cabin')
-  const bandList = bands(ac, cfg.zoneCount)
-  const buckets = bandList.map(() => [])
-  for (const p of rest) buckets[bandOf(p.rowSlot, bandList)].push(p)
-  let n = 0
-  for (let bi = bandList.length - 1; bi >= 0; bi--, n++) {
-    for (const p of label(shuffled(rng, buckets[bi]), `Block ${n + 1}`)) out.push(p)
+  const sp = new Spatial(ac, cfg)
+  const buckets = []
+  for (let i = 0; i < sp.nBands; i++) buckets.push([])
+  for (const p of rest) buckets[sp.callIndex(p)].push(p)
+  for (let i = 0; i < sp.nBands; i++) {
+    for (const p of label(shuffled(rng, buckets[i]), `Block ${i + 1}`)) out.push(p)
   }
   return out
 }
@@ -422,6 +564,7 @@ function stratPriority5tier(pax, ac, cfg, rng) {
  * strategy with cohesion off is not a model of anything real.
  */
 function stratCommonSense5tier(pax, ac, cfg, rng) {
+  const sp = new Spatial(ac, cfg)
   const econSlots = ac.economyRowSlots
   const mid = econSlots.length ? econSlots[floorDiv(econSlots.length, 2)] : 0
 
@@ -438,7 +581,11 @@ function stratCommonSense5tier(pax, ac, cfg, rng) {
   // outside-in x rear-first ladder across groups 1..4.
   const baseGroup = (p) => {
     if (p.seat.classKey !== 'economy') return 0
-    const rear = p.rowSlot >= mid
+    // "Rear" means the far half of the passenger's own door region. With one
+    // door that is the rear half of the cabin, unchanged; with two it is the
+    // half of that door's stretch furthest from it, which is the whole point --
+    // a cabin-wide "rear first" is near-door-first at the aft door.
+    const rear = sp.isFarHalf(p, mid)
     const kind = p.seat.kind
     if (kind === WINDOW) return rear ? 1 : 2
     if (kind === MIDDLE) return rear ? 2 : 3
@@ -462,7 +609,7 @@ function stratCommonSense5tier(pax, ac, cfg, rng) {
     // cabin boarding first is the commercially non-negotiable part this whole
     // strategy is built around conceding, and rear-first sorting alone would put
     // it behind the rear-seated elites it shares a group with.
-    sortByTuple(ordered, (p) => [p.seat.classKey === 'economy' ? 1 : 0, -p.rowSlot])
+    sortByTuple(ordered, (p) => [p.seat.classKey === 'economy' ? 1 : 0, sp.distKey(p)])
     for (const p of label(ordered, names[i])) out.push(p)
   }
   return out
@@ -492,8 +639,8 @@ function stratCommonSense5tier(pax, ac, cfg, rng) {
  * scheme that announces its flow logic and one that only gestures at it.
  */
 function stratSouthwest2026(pax, ac, cfg, rng) {
-  const bandList = bands(ac, cfg.zoneCount)
-  const nBands = bandList.length
+  const sp = new Spatial(ac, cfg)
+  const nBands = sp.nBands
   const maxDepth = Math.max(1, ac.maxDepth)
   const nCells = maxDepth * nBands
   const nGroups = 8
@@ -502,7 +649,7 @@ function stratSouthwest2026(pax, ac, cfg, rng) {
   // emission order of `wilma_zoned`.
   const locationRank = (p) => {
     const depthRank = maxDepth - Math.max(1, Math.min(maxDepth, p.depth))
-    const bandRank = nBands - 1 - bandOf(p.rowSlot, bandList)
+    const bandRank = sp.callIndex(p)
     return depthRank * nBands + bandRank
   }
 
@@ -525,7 +672,7 @@ function stratSouthwest2026(pax, ac, cfg, rng) {
     // seat would not have earned: without this an A-List aisle seat called in
     // Group 2 would board ahead of the Group 2 windows and undo the
     // zero-interference property the scheme is built on.
-    sortByTuple(ordered, (p) => [-p.depth, -p.rowSlot])
+    sortByTuple(ordered, (p) => [-p.depth, sp.distKey(p)])
     for (const p of label(ordered, `Group ${i + 1} of ${nGroups}`)) out.push(p)
   }
   return out

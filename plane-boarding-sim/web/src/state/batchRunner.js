@@ -16,7 +16,8 @@
  * shape `src/charts/ChartGrid.jsx` consumes.
  */
 import { createBatchWorker } from '../lib/engineBridge.js'
-import { aggregateBatch } from './aggregate.js'
+import { seedForRun } from '../lib/seed.js'
+import { aggregateBatch, chartMeta } from './aggregate.js'
 import { DEFAULT_SWEEP_PARAM, autoSweepRuns, specValues } from './sweep.js'
 
 /**
@@ -25,6 +26,8 @@ import { DEFAULT_SWEEP_PARAM, autoSweepRuns, specValues } from './sweep.js'
  * @param {object} opts
  * @param {object} opts.engine   resolved engine module
  * @param {object} opts.config   SimConfig
+ * @param {object} [opts.aircraft] the resolved aircraft, for the chart metadata
+ *        the runs themselves cannot carry (congestion column pitch, row numbers)
  * @param {string[]} opts.strategies
  * @param {number} opts.runs     replications per strategy
  * @param {?{param:string, values:number[], runs:number}} [opts.sweep] parameter
@@ -38,7 +41,7 @@ import { DEFAULT_SWEEP_PARAM, autoSweepRuns, specValues } from './sweep.js'
  * @param {(result:object)=>void} opts.onDone
  * @param {(message:string)=>void} opts.onError
  */
-export function startBatch({ engine, config, strategies, runs, sweep, names, onProgress, onDone, onError }) {
+export function startBatch({ engine, config, aircraft, strategies, runs, sweep, names, onProgress, onDone, onError }) {
   const list = strategies && strategies.length ? strategies : [config.strategy]
   const spec = sweep && specValues(sweep).length ? sweep : null
   const points = specValues(spec)
@@ -49,15 +52,34 @@ export function startBatch({ engine, config, strategies, runs, sweep, names, onP
   // a progress bar that stops at 100% and keeps running is a bar that lies.
   const total = list.length * runs + sweepTotal
 
+  // Scenario facts the charts cannot derive from the runs. The worker supplies
+  // them itself; this fills them in for any batch that arrives without them, so
+  // the charts never have to guess a column width or invent a row number.
+  const withMeta = (result) => {
+    if (!result || typeof result !== 'object') return result
+    const want = chartMeta(config, aircraft)
+    const meta = result.meta || {}
+    if (meta.sampleInterval != null && meta.rowSlots != null) return result
+    return {
+      ...result,
+      meta: {
+        ...meta,
+        sampleInterval: meta.sampleInterval ?? want.sampleInterval,
+        rowSlots: meta.rowSlots ?? want.rowSlots,
+      },
+    }
+  }
+
   const worker = createBatchWorker()
   if (worker) {
     let stopped = false
     worker.onmessage = (ev) => {
       if (stopped) return
       const msg = ev.data || {}
-      if (msg.type === 'progress') onProgress?.({ done: msg.done, total: msg.total ?? total, partial: msg.partial })
-      else if (msg.type === 'done') {
-        onDone?.(msg.result)
+      if (msg.type === 'progress') {
+        onProgress?.({ done: msg.done, total: msg.total ?? total, partial: withMeta(msg.partial) })
+      } else if (msg.type === 'done') {
+        onDone?.(withMeta(msg.result))
         worker.terminate()
       } else if (msg.type === 'error') {
         onError?.(msg.message || 'Worker error')
@@ -118,7 +140,7 @@ export function startBatch({ engine, config, strategies, runs, sweep, names, onP
     : null
 
   const assemble = (complete) => {
-    const partial = aggregateBatch({ byStrategy, names, config, done, total, complete })
+    const partial = aggregateBatch({ byStrategy, names, config, aircraft, done, total, complete })
     if (sweepBlock) partial.sweep = sweepBlock
     return partial
   }
@@ -134,7 +156,10 @@ export function startBatch({ engine, config, strategies, runs, sweep, names, onP
         const result = engine.runSimulation({
           ...config,
           strategy: job.key,
-          seed: (config.seed | 0) + job.run,
+          // `lib/seed.js`, the same helper the worker's seed plan uses: the
+          // two paths must draw the identical seed sequence or common random
+          // numbers stop being common.
+          seed: seedForRun(config, job.run),
           ...(job.kind === 'sweep' ? { [job.param]: job.value } : {}),
         })
         if (job.kind === 'main') byStrategy[job.key].push(result)

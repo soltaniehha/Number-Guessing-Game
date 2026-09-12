@@ -212,6 +212,7 @@ export class SimConfig {
     this.binCongestionWeight = Number(r.binCongestionWeight)
 
     this.zoneCount = Math.trunc(Number(r.zoneCount))
+    this.doorAwareZones = Boolean(r.doorAwareZones)
     this.keepPartiesTogether = Boolean(r.keepPartiesTogether)
     this.preboardFirst = Boolean(r.preboardFirst)
     this.nonComplianceRate = Number(r.nonComplianceRate)

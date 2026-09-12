@@ -31,11 +31,24 @@ function isRenderableReplay(replay) {
 export function CabinMode() {
   const { replay, aircraft, run, busy, runError, replayStale } = useStore()
   const renderable = hasCabinView && isRenderableReplay(replay)
+  const result = replay?.result || replay
+  // ENGINE_SPEC section 7: `completed` is false when the run hit
+  // `MAX_SIM_SECONDS`. The engine then back-fills a sit time for everybody
+  // still standing, so the read-out below otherwise looks like an ordinary
+  // finished boarding that merely took a suspiciously round two hours.
+  const truncated = result?.completed === false
 
   return (
     <div className="mode mode--cabin">
       <div className="viewport">
         {runError && <p className="alert alert--bad">{runError}</p>}
+        {truncated && (
+          <p className="alert alert--bad" role="status">
+            <b>This boarding never finished.</b> It hit the two-hour simulation limit with{' '}
+            {fmtInt(Math.max(0, (result.paxCount || 0) - seatedAtEnd(result)))} passengers still standing, so{' '}
+            {fmtClock(result.totalSeconds)} is where the simulation stopped, not how long boarding took.
+          </p>
+        )}
         {replayStale && (
           <p className="alert alert--stale">
             The scenario has changed since this run.{' '}
@@ -127,6 +140,13 @@ function CabinPlaceholder({ replay }) {
       )}
     </div>
   )
+}
+
+/** Seated count at the closing sample of the run's own curve. */
+function seatedAtEnd(result) {
+  const curve = result?.seatedCurve
+  if (!Array.isArray(curve) || curve.length === 0) return result?.paxCount || 0
+  return curve[curve.length - 1]?.seated ?? 0
 }
 
 /** Count passengers per state at time t, straight from the frame buffer. */

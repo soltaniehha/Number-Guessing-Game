@@ -149,20 +149,25 @@ def test_strategy_ordering_matches_the_literature():
 
 
 def test_a_cabin_wide_zone_order_cannot_be_right_for_two_doors():
-    """A finding worth pinning, because it is counter-intuitive and it falls out
-    of the model rather than being put in.
+    """The finding that forced `doorAwareZones`, kept as a pinned demonstration.
 
     "Board the rear zone first" means far-end-first at the forward door and
     NEAR-end-first at the aft door, and near-end-first is the front-to-back
-    pathology. So a zone scheme that helps through one door hurts through two.
-    The `doorSequencing` metric measures exactly this -- distance-from-door of
-    the first half of a door's queue minus the second half, reported for the
-    WORST door -- and the CLI surfaces it.
+    pathology. So a cabin-wide zone scheme that helps through one door hurts
+    through two. The `doorSequencing` metric measures exactly this --
+    distance-from-door of the first half of a door's queue minus the second
+    half, reported for the WORST door -- and the CLI surfaces it.
+
+    The naive behaviour is still reachable, and still wrong, at
+    `doorAwareZones: false`; this test is what documents the contrast.
     """
-    one = run_batch(a320_at_180(doors=["1L"]).replace(strategy="back_to_front"), runs=20)
-    two = run_batch(a320_at_180(doors=["1L", "2L"]).replace(strategy="back_to_front"), runs=20)
-    rnd1 = run_batch(a320_at_180(doors=["1L"]), runs=20)
-    rnd2 = run_batch(a320_at_180(doors=["1L", "2L"]), runs=20)
+    naive = dict(doorAwareZones=False)
+    one = run_batch(a320_at_180(doors=["1L"], **naive).replace(
+        strategy="back_to_front"), runs=20)
+    two = run_batch(a320_at_180(doors=["1L", "2L"], **naive).replace(
+        strategy="back_to_front"), runs=20)
+    rnd1 = run_batch(a320_at_180(doors=["1L"], **naive), runs=20)
+    rnd2 = run_batch(a320_at_180(doors=["1L", "2L"], **naive), runs=20)
 
     # Through one door the scheme is unambiguously far-end-first.
     assert one.sequencing.mean > 0.20
@@ -172,6 +177,32 @@ def test_a_cabin_wide_zone_order_cannot_be_right_for_two_doors():
     assert two.mean / rnd2.mean > one.mean / rnd1.mean
     # Random has no spatial logic at all, so it scores ~0 either way.
     assert abs(rnd2.sequencing.mean) < 0.10
+
+
+def test_door_aware_zones_repair_the_two_door_sequencing():
+    """...and the fix, measured on the same quantity.
+
+    Sequencing within each door's own region turns the worst door's score from
+    firmly negative to firmly positive, without touching the single-door case
+    at all -- which is the property that makes the change safe to ship, since
+    every calibration figure in RESEARCH_PARAMETERS 12.3 is single-door.
+    """
+    naive = run_batch(a320_at_180(doors=["1L", "2L"], doorAwareZones=False).replace(
+        strategy="back_to_front"), runs=20)
+    aware = run_batch(a320_at_180(doors=["1L", "2L"], doorAwareZones=True).replace(
+        strategy="back_to_front"), runs=20)
+    assert naive.sequencing.mean < -0.10, "the naive order is near-door-first somewhere"
+    assert aware.sequencing.mean > 0.10, (
+        f"door-aware zones must be far-end-first at BOTH doors, worst door scored "
+        f"{aware.sequencing.mean:.3f}")
+
+    # Single door: the flag must be completely inert, to the second.
+    off = run_batch(a320_at_180(doors=["1L"], doorAwareZones=False).replace(
+        strategy="back_to_front"), runs=8)
+    on = run_batch(a320_at_180(doors=["1L"], doorAwareZones=True).replace(
+        strategy="back_to_front"), runs=8)
+    assert off.totalSeconds.values == on.totalSeconds.values, (
+        "doorAwareZones changed a single-door run; it must be a no-op there")
 
 
 #: MONITORED, not gated. The published ratio magnitudes, with tolerances wide

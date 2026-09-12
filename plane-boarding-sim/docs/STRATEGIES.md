@@ -124,8 +124,34 @@ airlines used before status tiers took over.
 ### 11. `open_seating` — Open seating (Southwest, 1971–2026) — **retired**
 No seat is assigned. The queue is by check-in position (a proxy: shuffle, with
 elites pulled to the front). Each passenger picks a seat on entering the cabin
-per `openSeatingPolicy` — see ENGINE_SPEC §6.5. Interestingly fast, because
-people self-select to avoid each other.
+per `openSeatingPolicy` — see ENGINE_SPEC §6.5.
+
+**In this model it is the slowest strategy on every aircraft**, and by a wide
+margin: on an a320neo at 180 passengers through one door, 1.46× random for the
+shipped `avoid_neighbours` policy and 3.37× for `front_first`. An earlier
+version of this section claimed it was "interestingly fast, because people
+self-select to avoid each other". That claim had no citation behind it, it
+contradicted the model, and the model is right about the mechanism it contains:
+
+* Choosing a seat **near the door** serialises the boarding completely. The
+  free frontier is one row wide, the passenger stowing is always standing
+  exactly where the next passenger has to walk, and the total becomes the sum of
+  every service time with no overlap at all. That is `front_first`, at 3.37×,
+  and it is not a modelling artefact — "everyone takes the first free seat" has
+  that property in a single-file aisle in reality too.
+* Choosing a seat **far from everyone else** avoids that, and costs walking:
+  `avoid_neighbours` spreads the cabin out and lands at 1.46×.
+
+**What the model does not contain, and why the reputation may still be
+deserved.** The self-selection that would actually make open seating quick is
+*interference* avoidance — people decline a seat that means climbing over a
+stranger, and decline one that will make a stranger climb over them, which
+produces window-first filling for free. None of the four policies models that;
+they all choose on position or spacing alone. Adding one would need a source
+that says how real passengers trade the two off, and no reachable paper
+publishes one, so it is recorded as a known limitation
+(RESEARCH_PARAMETERS §12.2) rather than guessed at. Read the numbers above as
+"open seating with no interference avoidance", not as a verdict on open seating.
 
 **This is now a historical method.** Southwest ran it for 53 years and ended it
 on **27 January 2026**, replacing it with assigned seats and the scheme in §16.
@@ -311,8 +337,13 @@ shared stream in queue order. That is what lets a paired strategy comparison
 cancel them instead of counting them as noise. See ENGINE_SPEC §1.3.
 
 **Preboarding is a first-class swept parameter.** `preboardRate` defaults to
-2.5%, but the realistic baseline is **5–10% of the cabin** and leisure-market
-flights credibly reach **20–33%**. Above roughly 15% preboarding stops being a
+2.5%, which is deliberately **below** the realistic baseline of **5–10% of the
+cabin** (leisure-market flights credibly reach **20–33%**). The default is a
+measurement choice, not an estimate of reality: preboarding is a prologue that
+lands a block of passengers in the cabin before the strategy under test starts,
+and a default inside the realistic band would partly mask the ordering effect
+every comparison in this file is about. See RESEARCH_PARAMETERS §12.2 for the
+full argument; raise it to 5–10% when modelling a specific flight. Above roughly 15% preboarding stops being a
 prologue and becomes the binding constraint — the boarding time is set by the
 preboard block and the ordering strategy underneath it barely matters. That is a
 regime change, not a shift in a number, and it is worth sweeping for:

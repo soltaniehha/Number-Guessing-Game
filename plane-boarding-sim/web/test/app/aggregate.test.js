@@ -79,7 +79,9 @@ describe('readSummaries', () => {
     expect(rows).toEqual([
       expect.objectContaining({ key: 'wilma', n: 4, mean: 900, sd: 40 }),
     ])
-    expect(rows[0].ci95).toBeCloseTo(1.96 * (40 / 2), 5)
+    // t(n-1), not a flat 1.96: at n=4 the difference is 62%, and the chart
+    // layer has always used the t form.
+    expect(rows[0].ci95).toBeCloseTo(3.182 * (40 / 2), 5)
   })
 
   it('ignores strategies with no completed runs', () => {

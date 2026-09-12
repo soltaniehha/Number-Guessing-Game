@@ -34,7 +34,7 @@
  * record that keeps every field it reads.
  */
 import { summariseStrategy } from '../state/aggregate.js'
-import { SWEEPABLE, STRATEGIES, runSimulation } from './index.js'
+import { SWEEPABLE, STRATEGIES, resolveAircraft, runSimulation, toSimConfig } from './index.js'
 
 /** Yield to the message queue at least this often, so `stop` lands promptly. */
 const SLICE_MS = 25
@@ -59,6 +59,31 @@ function pct(sorted, q) {
   return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo)
 }
 
+/**
+ * Two-sided 95% t critical values, df 1..30; above that the normal
+ * approximation is within 0.5%. The same table `charts/primitives/stats.js`
+ * uses, restated here so the number on a chart and the number in the batch
+ * result are the same number.
+ */
+const T95 = [
+  12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228,
+  2.201, 2.179, 2.16, 2.145, 2.131, 2.12, 2.11, 2.101, 2.093, 2.086,
+  2.08, 2.074, 2.069, 2.064, 2.06, 2.056, 2.052, 2.048, 2.045, 2.042,
+]
+
+/**
+ * Two-sided 95% critical value for `df` degrees of freedom.
+ *
+ * A flat 1.96 is the large-sample limit and this project routinely reports
+ * n = 5..25, where it understates the interval by 41.6% at n=5, 20.7% at n=8
+ * and 12.3% at n=12. The charts already use the t form, so a flat 1.96 here
+ * also put two different numbers for the same quantity on the same screen.
+ */
+export function tCritical95(df) {
+  if (!Number.isFinite(df) || df < 1) return NaN
+  return df <= 30 ? T95[df - 1] : 1.96
+}
+
 /** `stats` from `state/aggregate.js`, restated for the pooled wait sample. */
 function stats(values) {
   const s = [...values].sort((a, b) => a - b)
@@ -70,7 +95,7 @@ function stats(values) {
     n,
     mean: round1(m),
     sd: round1(sd),
-    ci95: round1(n > 1 ? 1.96 * (sd / Math.sqrt(n)) : 0),
+    ci95: round1(n > 1 ? tCritical95(n - 1) * (sd / Math.sqrt(n)) : 0),
     min: round1(s[0] ?? 0),
     p05: round1(pct(s, 0.05)),
     p25: round1(pct(s, 0.25)),
@@ -96,8 +121,6 @@ class StrategyAccumulator {
     this.sumGrid = null
     this.accRows = 0
     this.accCols = 0
-    this.minRows = Infinity
-    this.minCols = Infinity
     this.gridCount = 0
     // perPassengerPooled -- kept in run order, because `stats` means and
     // variances are summed in that order.
@@ -123,25 +146,38 @@ class StrategyAccumulator {
 
     const grid = result.congestion
     if (Array.isArray(grid) && grid.length) {
-      if (this.sumGrid === null) {
-        this.accRows = grid.length
-        this.accCols = Math.min(...grid.map((row) => row.length))
-        this.sumGrid = []
-        for (let r = 0; r < this.accRows; r++) this.sumGrid.push(new Float64Array(this.accCols))
+      // ZERO-PAD to the longest run, do not crop to the shortest.
+      //
+      // This used to size the accumulator from the FIRST run and then crop
+      // every later one to it, so a longer replication's tail never entered the
+      // sum at all -- measured at 307 of 435 columns discarded in one batch.
+      // The tail is where late jams form, which is most of the point of the
+      // congestion chart.
+      //
+      // Padding is not a fudge: a run that has finished has zero bodies in the
+      // aisle, so a shorter run genuinely contributes 0 to every column past
+      // its end and dividing by the full `gridCount` is the unbiased mean over
+      // the whole window. Cropping, by contrast, silently changed the window.
+      let gridCols = 0
+      for (const row of grid) if (row.length > gridCols) gridCols = row.length
+      if (grid.length > this.accRows || gridCols > this.accCols) {
+        const rows = Math.max(this.accRows, grid.length)
+        const cols = Math.max(this.accCols, gridCols)
+        const grown = []
+        for (let r = 0; r < rows; r++) {
+          const dst = new Float64Array(cols)
+          if (this.sumGrid !== null && r < this.accRows) dst.set(this.sumGrid[r])
+          grown.push(dst)
+        }
+        this.sumGrid = grown
+        this.accRows = rows
+        this.accCols = cols
       }
-      let gridCols = Infinity
-      for (const row of grid) if (row.length < gridCols) gridCols = row.length
-      if (grid.length < this.minRows) this.minRows = grid.length
-      if (gridCols < this.minCols) this.minCols = gridCols
-      // Only cells inside the accumulator can ever be read back: `minRows` and
-      // `minCols` are minima over every grid INCLUDING the first, which sized
-      // it. Adding in run order reproduces aggregate.js's summation order.
-      const rows = Math.min(this.accRows, grid.length)
-      for (let r = 0; r < rows; r++) {
+      // Adding in run order reproduces aggregate.js's summation order.
+      for (let r = 0; r < grid.length; r++) {
         const src = grid[r]
         const dst = this.sumGrid[r]
-        const cols = Math.min(this.accCols, src.length)
-        for (let c = 0; c < cols; c++) dst[c] += src[c]
+        for (let c = 0; c < src.length; c++) dst[c] += src[c]
       }
       this.gridCount += 1
     }
@@ -161,8 +197,10 @@ class StrategyAccumulator {
 
   congestionMean() {
     if (!this.gridCount) return null
-    const rows = this.minRows
-    const cols = this.minCols
+    // The full padded grid: every column of the LONGEST run, averaged over all
+    // of them. See the note in `add`.
+    const rows = this.accRows
+    const cols = this.accCols
     if (!Number.isFinite(rows) || !Number.isFinite(cols) || rows <= 0 || cols <= 0) return null
     const out = []
     for (let r = 0; r < rows; r++) {
@@ -200,8 +238,28 @@ class StrategyAccumulator {
   }
 }
 
+/**
+ * Scenario facts the charts cannot derive from the runs themselves: the
+ * congestion matrix's column pitch and the real row numbers behind its row
+ * slots. Resolved once per assembly, and defensively -- a malformed config
+ * must degrade the metadata, never fail the batch.
+ */
+function scenarioMeta(config) {
+  try {
+    const cfg = toSimConfig(config || {})
+    const ac = resolveAircraft(cfg.aircraftId)
+    return {
+      sampleInterval: cfg.sampleInterval,
+      rowSlots: ac.rowSlots.map((r) => ({ slot: r.slot, number: r.number })),
+    }
+  } catch {
+    return { sampleInterval: null, rowSlots: null }
+  }
+}
+
 /** Assemble the BatchResult from the accumulators, `aggregateBatch`-shaped. */
 function assemble(accs, names, config, done, total, complete, sweep) {
+  const meta = scenarioMeta(config)
   const byStrategy = {}
   let paxCount = 0
   let seatCount = 0
@@ -220,6 +278,16 @@ function assemble(accs, names, config, done, total, complete, sweep) {
       loadFactor: config?.loadFactor,
       paxCount,
       seatCount,
+      // The congestion matrix's column pitch, in seconds. Charts were deriving
+      // it as `totalSeconds.mean / columns`, which is ~12% out: `columns` comes
+      // from the SHORTEST run and `totalSeconds` is the mean run length, so the
+      // two are not the same window. The engine knows the real number.
+      sampleInterval: meta.sampleInterval,
+      // One entry per congestion-matrix row, in slot order. The matrix is
+      // indexed by row SLOT, and a chart labelling rows `slot + 1` is only right
+      // for an aircraft that starts at row 1 and skips nothing -- on b787_9,
+      // slot 30 is row 42, not row 31.
+      rowSlots: meta.rowSlots,
       runsRequested: config?.runs,
       runsDone: done,
       complete: Boolean(complete),

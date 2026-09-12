@@ -4,7 +4,7 @@
     python3 -m plane_boarding.cli compare --aircraft a320neo --runs 20
     python3 -m plane_boarding.cli sweep   --aircraft a320neo --strategies random wilma
     python3 -m plane_boarding.cli sweep   --param preboardRate --strategies wilma
-    python3 -m plane_boarding.cli export  --aircraft b777_300er --replay out.json
+    python3 -m plane_boarding.cli export  --aircraft b777_300er --replay --out out.json
 
 The text output is meant to be read, not parsed: aligned columns, a bar chart of
 relative times, and the diagnostic quantities (interference mix, gate checks,

@@ -15,17 +15,26 @@ from plane_boarding.batch import compare_strategies, run_batch
 from plane_boarding.cli import shared_ranks, shared_ranks_paired
 from plane_boarding.config import DOOR_STREAM_BASE, ticks_for
 from plane_boarding.engine import simulate
-from plane_boarding.metrics import Aggregate, PairedDifference
+from plane_boarding.metrics import Aggregate, t_critical_95, PairedDifference
 from plane_boarding.rng import PCG32
 
 from helpers import cfg_for
 
 
-def unpaired_ci(a, b):
-    """CI half-width on a difference of two INDEPENDENT means -- what you are
-    implicitly using if you eyeball two marginal error bars."""
+def unpaired_se(a, b):
+    """STANDARD ERROR of a difference of two INDEPENDENT means -- what you are
+    implicitly using if you eyeball two marginal error bars.
+
+    The standard error, not the interval. Whether pairing helps is a fact about
+    variance, and comparing intervals instead would drag in the two critical
+    values: the paired interval uses t(n-1) while an unpaired one has roughly
+    twice the degrees of freedom, so a raw interval comparison partly measures
+    the difference between two t values rather than the difference pairing
+    makes. `test_the_interval_uses_a_t_critical_value` covers the critical
+    value separately.
+    """
     ag, bg = Aggregate(a), Aggregate(b)
-    return 1.96 * math.sqrt(ag.sd ** 2 / len(a) + bg.sd ** 2 / len(b))
+    return math.sqrt(ag.sd ** 2 / len(a) + bg.sd ** 2 / len(b))
 
 
 # --- is the pairing real? ---------------------------------------------------
@@ -83,9 +92,13 @@ def test_pairing_narrows_the_interval_on_real_simulation_data():
     wilma = next(b for b in res if b.strategy == "wilma")
     base = next(b for b in res if b.strategy == "random")
     paired = wilma.paired_against(base)
-    unpaired = unpaired_ci(wilma.totalSeconds.values, base.totalSeconds.values)
-    assert paired.ci95 < unpaired, (
-        f"paired CI {paired.ci95:.1f}s is not narrower than unpaired {unpaired:.1f}s "
+    # Standard errors, not intervals -- see `unpaired_se`. Whether pairing helps
+    # is a fact about variance, and an interval comparison would also carry the
+    # difference between two t critical values on different degrees of freedom.
+    paired_se = paired.sd / (paired.n ** 0.5)
+    unpaired = unpaired_se(wilma.totalSeconds.values, base.totalSeconds.values)
+    assert paired_se < unpaired, (
+        f"paired SE {paired_se:.1f}s is not smaller than unpaired {unpaired:.1f}s "
         f"-- common random numbers are buying nothing")
 
 
@@ -103,7 +116,7 @@ def test_a_small_but_real_difference_is_caught_by_pairing_and_missed_marginally(
     assert shared_ranks_paired([a, b]) == [1, 2], "pairing should separate them"
     d = PairedDifference(b, a)
     assert d.significant and d.mean == pytest.approx(2.0)
-    assert unpaired_ci(a, b) > d.ci95 * 10
+    assert unpaired_se(a, b) > (d.sd / (d.n ** 0.5)) * 10
 
 
 def test_a_genuine_tie_still_reads_as_a_tie():
@@ -275,9 +288,27 @@ def test_pairing_now_helps_even_for_a_strategy_that_diverges_hard():
     b2f = next(b for b in res if b.strategy == "back_to_front")
     base = next(b for b in res if b.strategy == "random")
     paired = b2f.paired_against(base)
-    unpaired = unpaired_ci(b2f.totalSeconds.values, base.totalSeconds.values)
-    assert paired.ci95 < unpaired, (
-        f"paired CI {paired.ci95:.1f}s is not narrower than unpaired {unpaired:.1f}s "
+    paired_se = paired.sd / (paired.n ** 0.5)
+    unpaired = unpaired_se(b2f.totalSeconds.values, base.totalSeconds.values)
+    assert paired_se < unpaired, (
+        f"paired SE {paired_se:.1f}s is not smaller than unpaired {unpaired:.1f}s "
         f"even for back-to-front -- the CRN has stopped reaching the strategies "
         f"that diverge from the baseline, which is exactly the case it exists for")
     assert paired.significant, "back-to-front is genuinely slower than random"
+
+
+def test_the_interval_uses_a_t_critical_value_not_a_flat_1_96():
+    """A flat 1.96 is the large-sample limit, and this project reports n as low
+    as 5 -- where it understates the interval by 41.6%. Reporting a "95%
+    interval" 40% too narrow changes which comparisons read as significant,
+    which is the one question the tool exists to answer."""
+    from plane_boarding.metrics import Aggregate as Agg
+    values = [100.0, 110.0, 90.0, 105.0, 95.0]
+    a = Agg(values)
+    se = a.sd / (a.n ** 0.5)
+    assert a.ci95 == pytest.approx(t_critical_95(4) * se)
+    assert a.ci95 > 1.96 * se
+    assert a.ci95 / (1.96 * se) == pytest.approx(2.776 / 1.96, rel=1e-9)
+    # ...and it converges on the normal limit for a large sample.
+    big = Agg(values * 20)
+    assert big.ci95 == pytest.approx(1.96 * big.sd / (big.n ** 0.5))

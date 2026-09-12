@@ -509,6 +509,99 @@ They are collected here so they are not mistaken for sourced numbers:
   to Group 2. The shipped table is deliberately conservative, so the measured
   cost of merging status into a flow ordering is a lower bound.
 
+- **Aisle flow constants** (`parity/defaults.json` `_constants`) — `DESIRED_HEADWAY`
+  = 0.85 m and `MIN_SPEED_FRACTION` = 0.15. Neither is a boarding-literature
+  value. The headway is the distance at which a follower starts slowing, taken
+  as roughly one pace beyond the 0.40 m body depth so the model has a graded
+  approach rather than a hard stop; the floor stops a dense queue from
+  asymptotically freezing, which a pure linear law does. Both shape the
+  approach to a jam, not its duration, and the boarding time is insensitive to
+  them: doubling the headway or halving the floor moves an a320neo single-door
+  run by under 2%. Pedestrian-dynamics work (Weidmann's fundamental diagram)
+  supports the *shape* — speed falling with density — but not these numbers.
+- **`stowVariability` = 0.28** — the standard deviation of the per-passenger
+  stow multiplier, drawn `truncnormal(1.0, 0.28, 0.35, 3.00)`. Schultz's Weibull
+  gives the spread of a *draw*; this is the spread of a *person*, i.e. the part
+  of stow time that is a property of the traveller and is the same on every one
+  of their bags. Splitting the two is what makes a two-bag passenger's total
+  super-linear in the right way. 0.28 is chosen so the multiplier's middle 90%
+  spans roughly 0.55–1.45, a factor of ~2.6 between a brisk and a slow
+  passenger, which is the range Schultz's own per-passenger scatter suggests
+  without his publishing a figure for it.
+- **`binCongestionWeight` = 0.45** — stow duration carries a
+  `(1 + 0.45 * fill²)` multiplier, so a passenger reaching a bin that is already
+  full pays 45% more. Quadratic because the difficulty is in *finding* the last
+  gap rather than in lifting, and 0.45 because that puts the last bag into a
+  full bin at roughly the same cost as one row of walk-back — the two mechanisms
+  should not double-count. Measured contribution to a full-cabin boarding: ~6%.
+- **`shuffleSamePartyMovements` = 2** — a passenger whose blockers are all in
+  their own party pays two elementary movements instead of the 4/5/9 a stranger
+  costs. The direction is not in doubt — a family shuffles itself out of a row
+  in one coordinated motion rather than three polite negotiations — but no paper
+  times it. Two movements is "stand, sit back down" and is the smallest count
+  that is not "free", chosen so party cohesion is still a measurable friction.
+- **`slowPaxRate` = 0.05, `slowSpeedFactor` = 0.55, `slowStowFactor` = 1.6** —
+  the reduced-mobility tail. 5% of passengers walk at 55% of their drawn speed
+  and stow 1.6× slower. Schultz separates passenger classes but publishes no
+  mix; these are set so the slow tail costs ~2% of the boarding, which is what
+  the sensitivity sweep in §11.3 measured before it was fixed at these values.
+  A carrier with a different demographic should sweep them.
+- **`childRate` = 0.18** — probability a party of 2 or more includes a child.
+  Used only to flag the passenger for the renderer's tooltip; it feeds no timing
+  term. Inferred from the leisure share of mixed traffic, not measured.
+- **`eliteMix`** = 5% top elite / 10% mid elite / 15% cardholder / 55% standard
+  / 15% basic. No airline publishes its status mix. Constructed to be
+  conservative in the direction that matters: the top two tiers together are
+  15%, which is at the low end of the 15–25% that US carriers' boarding-group
+  sizes imply, so the measured cost of selling queue position is a *lower*
+  bound. The 15% basic-economy share is the one figure with outside support
+  (US majors' reported basic-economy penetration). `eliteForwardBias` above
+  governs where these sit, and its own entry explains why that is the assumption
+  to sweep rather than this one.
+- **`complianceJitter` = 6** — a non-compliant passenger's queue position moves
+  by `randint(-6..+6)`. Schultz gives the 85% conformance *rate* (§5) but not
+  the displacement. Six positions is "a couple of groups early or late" on a
+  five-group scheme and is deliberately local: the mechanism being modelled is
+  someone drifting into the wrong group, not someone boarding at random. The
+  test `test_non_compliance_shuffles_the_queue_locally_but_not_globally` pins that reading.
+- **`lateRate` = 0.01** — 1% of passengers arrive after their group and board at
+  the very back. No source. Set low on purpose: the effect on the *mean* is
+  negligible by construction and the reason it exists at all is the tail, since
+  one late passenger seated at the window of row 3 can hold the aisle at the
+  worst possible moment.
+- **`preboardRate` = 0.025, and why it ships below the realistic band.**
+  `STRATEGIES.md` ("Universal post-processing") gives the realistic baseline
+  as **5–10% of the cabin**,
+  with leisure markets reaching 20–33%, and 2.5% is deliberately below all of
+  it. Preboarding is a *prologue*: it lands a block of passengers in the cabin
+  before the strategy under test starts, and above roughly 15% it becomes the
+  binding constraint and the ordering underneath stops mattering (a regime
+  change, not a shift in a number). Every strategy comparison in this document
+  is a claim about the ordering, so the default is set low enough that the
+  prologue does not mask the thing being measured, and preboarding is exposed as
+  a first-class swept parameter instead
+  (`cli sweep --param preboardRate`). **The default is a measurement choice, not
+  an estimate of reality** — anyone modelling a specific flight should raise it
+  to the 5–10% band, and anyone modelling a leisure route should sweep it.
+- **`doorAwareZones` = true** (ENGINE_SPEC §4.1) — that a spatial ordering
+  should be measured from the passenger's own door is *inference*, not
+  citation. Every published zone scheme describes a cabin-wide order, because
+  the literature is overwhelmingly single-aisle single-door. The model's own
+  `doorSequencing` metric says the cabin-wide order is near-door-first at the
+  aft door, which is the front-to-back pathology, and the measured penalty is
+  real; but no paper proposes the per-region fix, so it ships as a default with
+  the naive behaviour one config key away.
+- **`MAX_DT` = 1.0 s** — an engineering bound, not a physical one: twice the
+  control panel's own maximum, set so that a `dt` large enough to make the
+  simulation degenerate is rejected rather than answered.
+- **The open-seating policy set** (ENGINE_SPEC §6.5) — all four policies are
+  constructed, none is from a source, and collectively they are missing the
+  mechanism usually credited with making open seating fast: declining a seat
+  that means climbing over a stranger. That absence is why `open_seating`
+  measures as the slowest strategy in the model, and it is a limitation of the
+  model rather than a finding about open seating. Fixing it needs a source for
+  how passengers trade spacing against interference, and none was reachable.
+
 ### 12.3 Partial aisle blocking while stowing (`stowPassSpeedFactor` = 0.40)
 
 **What Schultz does.** In an ASEP/cellular model a passenger occupies a cell or

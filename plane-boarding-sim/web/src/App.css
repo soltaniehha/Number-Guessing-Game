@@ -493,6 +493,20 @@
 .door.is-locked { cursor: not-allowed; }
 .door__input[aria-disabled='true'] { cursor: not-allowed; }
 .door__input { accent-color: var(--good); margin: 0; }
+/*
+ * Doors that exist on the airframe but cannot be boarded through. Shown,
+ * because their absence from the list is its own confusion, but with no
+ * control in them at all: they are not a choice.
+ */
+.doors__other { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px; }
+.door--unusable {
+  grid-template-columns: auto 1fr;
+  cursor: default;
+  opacity: 0.55;
+  border-style: dashed;
+  background: transparent;
+}
+.door--unusable:hover { border-color: var(--control-border); }
 .door__id { font-size: 12px; font-weight: 600; }
 .door__meta { font-size: 10.5px; color: var(--text-3); text-align: right; }
 
@@ -597,7 +611,24 @@
 .toolbar__title { margin: 0; font-size: 14px; font-weight: 650; }
 .toolbar__subtitle { margin: 1px 0 0; font-size: 11.5px; color: var(--text-3); }
 .toolbar__progress { flex: 1; display: flex; align-items: center; gap: 10px; min-width: 0; }
-.toolbar__count { font-size: 11.5px; color: var(--text-2); white-space: nowrap; }
+/*
+ * The counter is monospaced AND right-aligned in a fixed box: it used to grow
+ * a character at a time as the run count climbed (9/2,000 -> 1,999/2,000),
+ * pushing the Stop button leftwards under the pointer of anyone about to press
+ * it. `ch` units on a mono face make the box wide enough for the widest count
+ * this app can produce, so nothing after it ever moves.
+ */
+.toolbar__count {
+  font-size: 11.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  min-width: 17ch;
+  text-align: right;
+  flex: none;
+}
+/* ...and the button keeps its own width whichever word it is showing. */
+.toolbar > .btn { flex: none; min-width: 5.5rem; justify-content: center; }
 
 .empty {
   margin: auto;
@@ -727,6 +758,19 @@
 .rank__num { text-align: right; white-space: nowrap; }
 .rank__name { font-weight: 550; color: var(--text); }
 .rank tr.is-best .rank__name { color: var(--good); }
+.rank__num abbr { text-decoration: none; color: var(--text-3); }
+.rank__ns { color: var(--text-3); }
+.rank__flag { color: var(--warn); font-weight: 500; white-space: nowrap; }
+.rank__legend {
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+.rank__legend p { margin: 0 0 6px; }
+.rank__legend p:last-child { margin-bottom: 0; }
+.rank__legend b { color: var(--text-2); font-weight: 600; }
 .rank__bar { width: 190px; }
 .rankbar { position: relative; display: block; height: 8px; border-radius: 4px; background: var(--surface-3); }
 .rankbar__range { position: absolute; top: 0; height: 100%; border-radius: 4px; background: color-mix(in srgb, var(--accent) 45%, transparent); }
@@ -801,6 +845,9 @@
 .stat__value { font-size: 13px; color: var(--text-2); }
 .stat--wide .stat__value { font-size: 15px; font-weight: 600; color: var(--text); }
 .stat--emphasis .stat__value { color: var(--text); font-weight: 600; }
+/* A figure that is not what its label usually means: a truncated run's length,
+   a batch that was stopped part-way. */
+.stat--warn .stat__value, .stat--warn .stat__label { color: var(--warn); }
 .statusbar__progress { flex: 1; min-width: 80px; }
 
 .progress { height: 5px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }

@@ -142,7 +142,7 @@ class SimConfig:
         "stowPassSpeedFactor", "doorArrivalMean",
         "binBagsPerRowSide", "binSearchRadius", "binSearchPenalty",
         "gateCheckPenalty", "binCongestionWeight",
-        "zoneCount", "keepPartiesTogether", "preboardFirst",
+        "zoneCount", "doorAwareZones", "keepPartiesTogether", "preboardFirst",
         "nonComplianceRate", "complianceJitter", "lateRate", "openSeatingPolicy",
         "dt", "sampleInterval", "raw",
     )
@@ -197,6 +197,7 @@ class SimConfig:
         self.binCongestionWeight = float(r["binCongestionWeight"])
 
         self.zoneCount = int(r["zoneCount"])
+        self.doorAwareZones = bool(r["doorAwareZones"])
         self.keepPartiesTogether = bool(r["keepPartiesTogether"])
         self.preboardFirst = bool(r["preboardFirst"])
         self.nonComplianceRate = float(r["nonComplianceRate"])

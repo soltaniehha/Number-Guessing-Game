@@ -21,7 +21,7 @@ from __future__ import annotations
 import math
 from typing import Any, Callable, Dict, List, Sequence, Tuple
 
-from .aircraft import AISLE_SEAT, Aircraft, MIDDLE, WINDOW
+from .aircraft import AISLE_SEAT, Aircraft, MIDDLE, SeatDoorSplit, WINDOW
 from .config import (
     SERVICE_PHASE_BEHAVIOUR, SERVICE_STREAM_BASE, SERVICE_STREAM_STRIDE, SimConfig,
 )
@@ -130,6 +130,123 @@ def _band_of(slot: int, bands: Sequence[Tuple[int, int]]) -> int:
     return len(bands) - 1
 
 
+class _Spatial:
+    """Where a passenger sits, measured from the door they will actually use.
+
+    Every spatially-ordered strategy in this file used to measure position as
+    `rowSlot`: bigger = further aft = board earlier. That is right for one
+    forward door and WRONG the moment a second door opens, because a cabin-wide
+    rear-first order is far-end-first at 1L and **near-end-first at 2L** -- and
+    near-end-first is the front-to-back pathology in miniature. The
+    `doorSequencing` metric (ENGINE_SPEC 7) was built to measure exactly that,
+    and it was scoring the headline strategy badly at the aft door: on the
+    shipped two-door a320neo default, `common_sense_5tier` came out SLOWER than
+    a free-for-all while beating it comfortably through one door.
+
+    So position is measured per DOOR REGION instead. The cabin is split between
+    the boarding doors by the same rule the engine uses to assign them
+    (`aircraft.SeatDoorSplit`, ENGINE_SPEC 5 -- shared code, so the strategy's
+    idea of a region and the engine's idea of a door cannot drift). Within each
+    region a passenger's rank runs from the far end of that region toward its
+    door, bands are cut inside the region, and band k of EVERY region is called
+    together so both doors are fed at once.
+
+    With a single boarding door -- or `doorAssignment: "single"`, or
+    `doorAwareZones: false` -- there is one region spanning the whole cabin and
+    every method below takes the old cabin-wide code path verbatim, so
+    single-door results are bit-identical to what they were.
+    """
+
+    __slots__ = ("single", "n_bands", "n_rows", "_bands", "_call", "_frac",
+                 "_rank", "_far")
+
+    def __init__(self, ac: Aircraft, cfg: SimConfig):
+        self._bands = _bands(ac, cfg.zoneCount)
+        self.n_rows = max(1, len(ac.rowSlots) - 1)
+        self.n_bands = len(self._bands)
+        doors = ac.resolve_doors(cfg.doors)
+        self.single = (
+            not cfg.doorAwareZones
+            or len(doors) == 1
+            or cfg.doorAssignment == "single"
+        )
+        if self.single:
+            self._call = self._frac = self._rank = self._far = None
+            return
+
+        split = SeatDoorSplit(doors, cfg.doorAssignment)
+        door_x = {d.id: d.x for d in doors}
+
+        # Which region each ROW SLOT belongs to, decided by the seats in it: a
+        # row goes to whichever door serves most of its seats, ties to the
+        # lower door index, so a row is never split across two zone schemes.
+        votes: Dict[int, Dict[str, int]] = {}
+        for seat in ac.seats:
+            votes.setdefault(seat.rowSlot, {})
+            did = split.of_seat(seat).id
+            votes[seat.rowSlot][did] = votes[seat.rowSlot].get(did, 0) + 1
+        order = {d.id: i for i, d in enumerate(doors)}
+        region_of: Dict[int, str] = {}
+        for slot, tally in votes.items():
+            region_of[slot] = min(tally, key=lambda k: (-tally[k], order[k]))
+
+        # Within each region, rank the slots by distance from that region's
+        # door, FARTHEST FIRST. `-x` breaks a distance tie deterministically.
+        by_region: Dict[str, List[int]] = {}
+        for slot, did in region_of.items():
+            by_region.setdefault(did, []).append(slot)
+        self._call, self._frac, self._rank, self._far = {}, {}, {}, {}
+        econ = set(ac.economyRowSlots)
+        for did, slots in by_region.items():
+            dx = door_x[did]
+            slots.sort(key=lambda sl: (-abs(ac.rowSlots[sl].x - dx), -ac.rowSlots[sl].x))
+            m = len(slots)
+            span = max(1, m - 1)
+            for i, sl in enumerate(slots):
+                self._rank[sl] = i
+                self._call[sl] = i * self.n_bands // m
+                self._frac[sl] = (m - 1 - i) / span
+            # "Far half" for the five-tier scheme: the far half of the ECONOMY
+            # rows of this region, mirroring the cabin-wide `rowSlot >= mid`.
+            eco = [sl for sl in slots if sl in econ]
+            cut = len(eco) // 2
+            far = set(eco[:cut]) if cut else set(eco)
+            for sl in slots:
+                self._far[sl] = sl in far
+
+    # -- the four things a spatial strategy needs ---------------------------
+
+    def call_index(self, p: Passenger) -> int:
+        """Band index in CALL order under a far-end-first scheme: 0 boards first."""
+        if self.single:
+            return self.n_bands - 1 - _band_of(p.rowSlot, self._bands)
+        return self._call[p.rowSlot]
+
+    def frac(self, p: Passenger) -> float:
+        """0 at the passenger's own door, 1 at the far end of their region.
+
+        In the single-region case this is `rowSlot / (nRows - 1)`, i.e. distance
+        from the nose, exactly as `reverse_pyramid` computed it before.
+        """
+        if self.single:
+            return p.rowSlot / self.n_rows
+        return self._frac[p.rowSlot]
+
+    def dist_key(self, p: Passenger) -> int:
+        """Sort key that puts the far end of the region first. Replaces
+        `-p.rowSlot`, and IS `-p.rowSlot` in the single-region case."""
+        if self.single:
+            return -p.rowSlot
+        return self._rank[p.rowSlot]
+
+    def is_far_half(self, p: Passenger, mid: int) -> bool:
+        """Is this passenger in the far half of their region's economy rows?
+        `mid` is the cabin-wide median slot, used in the single-region case."""
+        if self.single:
+            return p.rowSlot >= mid
+        return self._far[p.rowSlot]
+
+
 def _label(pax: Sequence[Passenger], text: str) -> List[Passenger]:
     for p in pax:
         p.groupLabel = text
@@ -163,14 +280,22 @@ def strat_random(pax: List[Passenger], ac: Aircraft, cfg: SimConfig, rng: PCG32)
 
 
 def _zoned(pax: List[Passenger], ac: Aircraft, cfg: SimConfig, rng: PCG32, rear_first: bool) -> List[Passenger]:
-    bands = _bands(ac, cfg.zoneCount)
-    buckets: List[List[Passenger]] = [[] for _ in bands]
+    """Contiguous bands, far end of each door's region first (or nearest first).
+
+    Buckets are indexed by CALL position rather than by physical band, which is
+    what lets the same loop serve one door and two: with one door the call order
+    is rear-to-front, with two it is middle-outward, and `_Spatial` is the only
+    thing that knows the difference.
+    """
+    sp = _Spatial(ac, cfg)
+    n = sp.n_bands
+    buckets: List[List[Passenger]] = [[] for _ in range(n)]
     for p in pax:
-        buckets[_band_of(p.rowSlot, bands)].append(p)
-    order = range(len(bands) - 1, -1, -1) if rear_first else range(len(bands))
+        k = sp.call_index(p)
+        buckets[k if rear_first else n - 1 - k].append(p)
     out: List[Passenger] = []
-    for n, bi in enumerate(order):
-        out.extend(_label(_shuffled(rng, buckets[bi]), _zone_label(n, len(bands))))
+    for i in range(n):
+        out.extend(_label(_shuffled(rng, buckets[i]), _zone_label(i, n)))
     return out
 
 
@@ -212,15 +337,14 @@ def strat_wilma_zoned(pax: List[Passenger], ac: Aircraft, cfg: SimConfig, rng: P
     Keeps WilMA's zero-interference property (depth is still the outer loop)
     while spreading the aisle load, which plain WilMA does not do at all.
     """
-    bands = _bands(ac, cfg.zoneCount)
+    sp = _Spatial(ac, cfg)
     out: List[Passenger] = []
     for d in range(ac.maxDepth, 0, -1):
         at_depth = [p for p in pax if p.depth == d]
-        for n, bi in enumerate(range(len(bands) - 1, -1, -1)):
-            lo, hi = bands[bi]
-            bucket = _shuffled(rng, [p for p in at_depth if lo <= p.rowSlot < hi])
+        for n in range(sp.n_bands):
+            bucket = _shuffled(rng, [p for p in at_depth if sp.call_index(p) == n])
             for p in bucket:
-                p.groupLabel = f"{_depth_label(ac, p)} {_zone_label(n, len(bands))}"
+                p.groupLabel = f"{_depth_label(ac, p)} {_zone_label(n, sp.n_bands)}"
             out.extend(bucket)
     return out
 
@@ -240,6 +364,7 @@ def strat_steffen_perfect(pax: List[Passenger], ac: Aircraft, cfg: SimConfig, rn
     Generalised beyond 3-3: "side" is a block (serving aisle plus which side of
     it), so a 3-4-3 has four sides and produces 8*maxDepth waves rather than 4.
     """
+    sp = _Spatial(ac, cfg)
     out: List[Passenger] = []
     n_groups = 0
     for side in range(ac.blockCount):
@@ -251,7 +376,10 @@ def strat_steffen_perfect(pax: List[Passenger], ac: Aircraft, cfg: SimConfig, rn
                 ]
                 if not bucket:
                     continue
-                bucket.sort(key=lambda p: -p.rowSlot)
+                # Row PARITY stays physical -- "two rows apart" is a fact about
+                # the cabin, not about the door -- but the order within a wave
+                # runs from the far end of each door's region toward its door.
+                bucket.sort(key=sp.dist_key)
                 n_groups += 1
                 out.extend(_label(bucket, f"Wave {n_groups}"))
     return out
@@ -287,7 +415,7 @@ def strat_reverse_pyramid(pax: List[Passenger], ac: Aircraft, cfg: SimConfig, rn
     lands between WilMA and Steffen in practically every study, and why America
     West measured a ~20% saving from it in revenue service.
     """
-    n_rows = max(1, len(ac.rowSlots) - 1)
+    sp = _Spatial(ac, cfg)
     n_depth = max(1, ac.maxDepth - 1)
 
     # Weight the two terms so that ONE depth step is worth exactly ONE full
@@ -300,9 +428,11 @@ def strat_reverse_pyramid(pax: List[Passenger], ac: Aircraft, cfg: SimConfig, rn
     w_row = 1.0 - w_depth
 
     def score(p: Passenger) -> float:
-        # Both terms run 0..1 with HIGHER = board earlier, so the row term is
-        # distance from the FRONT: the rearmost row scores 1.
-        row_term = p.rowSlot / n_rows
+        # Both terms run 0..1 with HIGHER = board earlier. The row term is
+        # distance from the passenger's own DOOR, which with one door is
+        # distance from the nose and the rearmost row scoring 1, exactly as
+        # before.
+        row_term = sp.frac(p)
         depth_term = (p.depth - 1) / n_depth
         return w_row * row_term + w_depth * depth_term
 
@@ -332,21 +462,25 @@ def strat_rotating_zone(pax: List[Passenger], ac: Aircraft, cfg: SimConfig, rng:
     Deliberately alternates the two ends of the aisle so the two flows interleave
     instead of one queueing behind the other.
     """
-    bands = _bands(ac, cfg.zoneCount)
-    buckets: List[List[Passenger]] = [[] for _ in bands]
+    sp = _Spatial(ac, cfg)
+    n = sp.n_bands
+    # Indexed by CALL position, 0 = the far end of the region: the alternation
+    # is then between the two ends of each door's own stretch of aisle, which is
+    # what the method is for, rather than between the two ends of the cabin.
+    buckets: List[List[Passenger]] = [[] for _ in range(n)]
     for p in pax:
-        buckets[_band_of(p.rowSlot, bands)].append(p)
+        buckets[sp.call_index(p)].append(p)
     order: List[int] = []
-    lo, hi = 0, len(bands) - 1
-    while lo <= hi:
-        order.append(hi)
-        if lo != hi:
-            order.append(lo)
-        lo += 1
-        hi -= 1
+    far, near = 0, n - 1
+    while far <= near:
+        order.append(far)
+        if far != near:
+            order.append(near)
+        far += 1
+        near -= 1
     out: List[Passenger] = []
-    for n, bi in enumerate(order):
-        out.extend(_label(_shuffled(rng, buckets[bi]), _zone_label(n, len(bands))))
+    for i, bi in enumerate(order):
+        out.extend(_label(_shuffled(rng, buckets[bi]), _zone_label(i, n)))
     return out
 
 
@@ -356,12 +490,12 @@ def strat_block_boarding(pax: List[Passenger], ac: Aircraft, cfg: SimConfig, rng
     premium = [p for p in pax if p.seat.classKey != "economy"]
     rest = [p for p in pax if p.seat.classKey == "economy"]
     out = _label(_shuffled(rng, premium), "Premium cabin")
-    bands = _bands(ac, cfg.zoneCount)
-    buckets: List[List[Passenger]] = [[] for _ in bands]
+    sp = _Spatial(ac, cfg)
+    buckets: List[List[Passenger]] = [[] for _ in range(sp.n_bands)]
     for p in rest:
-        buckets[_band_of(p.rowSlot, bands)].append(p)
-    for n, bi in enumerate(range(len(bands) - 1, -1, -1)):
-        out.extend(_label(_shuffled(rng, buckets[bi]), f"Block {n + 1}"))
+        buckets[sp.call_index(p)].append(p)
+    for i in range(sp.n_bands):
+        out.extend(_label(_shuffled(rng, buckets[i]), f"Block {i + 1}"))
     return out
 
 
@@ -444,6 +578,7 @@ def strat_common_sense_5tier(pax: List[Passenger], ac: Aircraft, cfg: SimConfig,
     and highest applicable", Lufthansa's "and companions" -- so a run of this
     strategy with cohesion off is not a model of anything real.
     """
+    sp = _Spatial(ac, cfg)
     econ_slots = ac.economyRowSlots
     mid = econ_slots[len(econ_slots) // 2] if econ_slots else 0
 
@@ -459,7 +594,11 @@ def strat_common_sense_5tier(pax: List[Passenger], ac: Aircraft, cfg: SimConfig,
         outside-in x rear-first ladder across groups 1..4."""
         if p.seat.classKey != "economy":
             return 0
-        rear = p.rowSlot >= mid
+        # "Rear" means the far half of the passenger's own door region. With
+        # one door that is the rear half of the cabin, unchanged; with two it is
+        # the half of that door's stretch furthest from it, which is the whole
+        # point -- a cabin-wide "rear first" is near-door-first at the aft door.
+        rear = sp.is_far_half(p, mid)
         kind = p.seat.kind
         if kind == WINDOW:
             return 1 if rear else 2
@@ -486,7 +625,7 @@ def strat_common_sense_5tier(pax: List[Passenger], ac: Aircraft, cfg: SimConfig,
         # this whole strategy is built around conceding, and rear-first sorting
         # alone would put it behind the rear-seated elites it shares a group
         # with.
-        ordered.sort(key=lambda p: (p.seat.classKey == "economy", -p.rowSlot))
+        ordered.sort(key=lambda p: (p.seat.classKey == "economy", sp.dist_key(p)))
         out.extend(_label(ordered, names[i]))
     return out
 
@@ -514,8 +653,8 @@ def strat_southwest_2026(pax: List[Passenger], ac: Aircraft, cfg: SimConfig, rng
     more of the underlying spatial order, and it is the difference between a
     scheme that announces its flow logic and one that only gestures at it.
     """
-    bands = _bands(ac, cfg.zoneCount)
-    n_bands = len(bands)
+    sp = _Spatial(ac, cfg)
+    n_bands = sp.n_bands
     max_depth = max(1, ac.maxDepth)
     n_cells = max_depth * n_bands
     n_groups = 8
@@ -524,7 +663,7 @@ def strat_southwest_2026(pax: List[Passenger], ac: Aircraft, cfg: SimConfig, rng
         # Deepest seat (window) first, then rearmost band first: identical to
         # the emission order of `wilma_zoned`.
         depth_rank = max_depth - max(1, min(max_depth, p.depth))
-        band_rank = n_bands - 1 - _band_of(p.rowSlot, bands)
+        band_rank = sp.call_index(p)
         return depth_rank * n_bands + band_rank
 
     buckets: List[List[Passenger]] = [[] for _ in range(n_groups)]
@@ -546,7 +685,7 @@ def strat_southwest_2026(pax: List[Passenger], ac: Aircraft, cfg: SimConfig, rng
         # their seat would not have earned: without this an A-List aisle seat
         # called in Group 2 would board ahead of the Group 2 windows and undo
         # the zero-interference property the scheme is built on.
-        ordered.sort(key=lambda p: (-p.depth, -p.rowSlot))
+        ordered.sort(key=lambda p: (-p.depth, sp.dist_key(p)))
         out.extend(_label(ordered, f"Group {i + 1} of {n_groups}"))
     return out
 

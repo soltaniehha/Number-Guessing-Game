@@ -29,7 +29,9 @@ import math
 from bisect import bisect_left
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from .aircraft import Aircraft, Door, Seat, get_aircraft
+from .aircraft import (
+    Aircraft, Door, Seat, SeatDoorSplit, door_for_x, get_aircraft, split_boundaries,
+)
 from .config import (
     BODY_DEPTH, DESIRED_HEADWAY, DOOR_STREAM_BASE, MAX_SIM_SECONDS,
     MIN_SPEED_FRACTION, ORDER_STREAM, PAX_STREAM, QUEUED, SEATED,
@@ -48,16 +50,6 @@ OPEN_SEATING = "open_seating"
 # ---------------------------------------------------------------------------
 # Door assignment (ENGINE_SPEC 5)
 # ---------------------------------------------------------------------------
-
-def _split_boundaries(doors: Sequence[Door]) -> List[float]:
-    """Midpoints between consecutive doors, sorted fore to aft."""
-    xs = sorted(d.x for d in doors)
-    return [(xs[i] + xs[i + 1]) * 0.5 for i in range(len(xs) - 1)]
-
-
-def _door_for_x(doors_sorted: Sequence[Door], bounds: Sequence[float], x: float) -> Door:
-    return doors_sorted[bisect_left(bounds, x)]
-
 
 def assign_doors(
     queue: Sequence[Passenger], ac: Aircraft, doors: Sequence[Door],
@@ -90,27 +82,12 @@ def assign_doors(
             p.doorId = doors[best].id
         return
 
-    by_x = sorted(doors, key=lambda d: d.x)
-    bounds = _split_boundaries(by_x)
-
-    if cfg.doorAssignment == "split_by_row":
-        for p in queue:
-            p.doorId = _door_for_x(by_x, bounds, p.seat.x).id
-        return
-
-    # split_by_aisle: use the door feeding your seat's aisle, ties broken by row.
-    per_aisle: Dict[int, List[Door]] = {}
-    for d in by_x:
-        per_aisle.setdefault(d.aisleIndex, []).append(d)
-    fallback_bounds = bounds
+    # The geometric split, shared with the boarding strategies so that a
+    # door-aware ordering and the engine cannot disagree about which door a
+    # passenger walks to. See `aircraft.SeatDoorSplit`.
+    split = SeatDoorSplit(doors, cfg.doorAssignment)
     for p in queue:
-        cand = per_aisle.get(p.seat.aisleIndex)
-        if not cand:
-            p.doorId = _door_for_x(by_x, fallback_bounds, p.seat.x).id
-        elif len(cand) == 1:
-            p.doorId = cand[0].id
-        else:
-            p.doorId = _door_for_x(cand, _split_boundaries(cand), p.seat.x).id
+        p.doorId = split.of_seat(p.seat).id
 
 
 def door_regions(ac: Aircraft, doors: Sequence[Door]) -> List[List[Seat]]:
@@ -118,11 +95,11 @@ def door_regions(ac: Aircraft, doors: Sequence[Door]) -> List[List[Seat]]:
     between consecutive doors. Same rule as `split_by_row`, reused so the open
     seating quota and the assigned-seat door split cannot disagree."""
     by_x = sorted(doors, key=lambda d: d.x)
-    bounds = _split_boundaries(by_x)
+    bounds = split_boundaries(by_x)
     order = {d.id: i for i, d in enumerate(doors)}
     out: List[List[Seat]] = [[] for _ in doors]
     for seat in ac.seats:
-        out[order[_door_for_x(by_x, bounds, seat.x).id]].append(seat)
+        out[order[door_for_x(by_x, bounds, seat.x).id]].append(seat)
     return out
 
 

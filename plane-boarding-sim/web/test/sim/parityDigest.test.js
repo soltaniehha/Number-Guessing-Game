@@ -10,12 +10,16 @@ import { describe, expect, it } from 'vitest'
 import {
   canonical,
   digestFor,
+  f6,
   fnv1a32,
+  geometryFingerprint,
   parseJsonRaw,
   plain,
   r9,
   seatedCurve,
 } from '../../../parity/emit_js.mjs'
+import { aircraftIds, getAircraft } from '../../src/sim/aircraft.js'
+import { pyRound } from '../../src/sim/pyutil.js'
 
 const FIXTURES_PATH = new URL('../../../parity/fixtures.json', import.meta.url)
 const raw = parseJsonRaw(readFileSync(FIXTURES_PATH, 'utf-8'))
@@ -81,6 +85,50 @@ describe('seatedCurve', () => {
 
   it('handles an empty cabin', () => {
     expect(seatedCurve([], 0)).toEqual([[0, 0], [10, 0]])
+  })
+})
+
+describe('geometryFingerprint', () => {
+  it('covers the resolved geometry of every airframe', () => {
+    // The digest used to stop at the cabin door: nothing in it depended on
+    // `geometryPayload`, so a rounding disagreement there could ship undetected.
+    // It is a HASH rather than a list of numbers on purpose -- `parity/compare.py`
+    // compares numerically with a 1e-6 tolerance, and the disagreement being
+    // looked for (`round(x, 6)` against a hand-rolled `Math.round(v*1e6)/1e6` at
+    // a tie) is exactly 1e-6 wide, so only an exact string comparison sees it.
+    const byAircraft = new Map()
+    for (const f of fixtures) {
+      const d = digestFor(f)
+      const aid = plain(f.get('config')).aircraftId
+      if (byAircraft.has(aid)) expect(byAircraft.get(aid)).toBe(d.geometry_hash)
+      else byAircraft.set(aid, d.geometry_hash)
+    }
+    expect([...byAircraft.keys()].sort()).toEqual([...aircraftIds()].sort())
+    expect(new Set(byAircraft.values()).size).toBe(byAircraft.size)
+  })
+
+  it('is sensitive to a 6-dp change in a coordinate', () => {
+    const ac = getAircraft('a320neo')
+    const before = geometryFingerprint(ac)
+    const seat = ac.seats[0]
+    const original = seat.x
+    try {
+      seat.x = original + 1e-6
+      expect(geometryFingerprint(ac)).not.toBe(before)
+    } finally {
+      seat.x = original
+    }
+    expect(geometryFingerprint(ac)).toBe(before)
+  })
+
+  it('formats floats language-neutrally', () => {
+    // `toFixed(6)` on both sides, with -0 normalised: Python prints an integral
+    // float as `1.0` and JavaScript prints it as `1`, so the fingerprint must not
+    // go anywhere near either language's own number repr.
+    expect(f6(0)).toBe('0.000000')
+    expect(f6(-0)).toBe('0.000000')
+    expect(f6(1)).toBe('1.000000')
+    expect(f6(pyRound(0.0000005, 6))).toBe('0.000000')
   })
 })
 

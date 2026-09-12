@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { BatchResult, compareStrategies, loadSweep, runBatch } from '../../src/sim/batch.js'
-import { Aggregate, PairedDifference, percentile } from '../../src/sim/metrics.js'
+import { Aggregate, PairedDifference, percentile, tCritical95 } from '../../src/sim/metrics.js'
 import { cfgFor } from './helpers.js'
 
 const cfg = cfgFor('e175', 'random', 1, { loadFactor: 0.8 })
@@ -29,7 +29,10 @@ describe('Aggregate', () => {
     expect(a.min).toBe(2)
     expect(a.max).toBe(9)
     expect(a.values).toEqual([2, 4, 4, 4, 5, 5, 7, 9])
-    expect(a.ci95).toBeCloseTo((1.96 * a.sd) / Math.sqrt(8), 12)
+    // t(n-1), not a flat 1.96: at n=8 the normal limit understates the interval
+    // by 20.7%, and at n=5 by 41.6%. See `tCritical95` in src/sim/metrics.js.
+    expect(a.ci95).toBeCloseTo((tCritical95(7) * a.sd) / Math.sqrt(8), 12)
+    expect(a.ci95).toBeGreaterThan((1.96 * a.sd) / Math.sqrt(8))
   })
 
   it('degrades to zeroes on an empty or single sample', () => {

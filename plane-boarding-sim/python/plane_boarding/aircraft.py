@@ -24,6 +24,7 @@ differently on its two sides.
 from __future__ import annotations
 
 import json
+from bisect import bisect_left
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .config import INCH, PARITY_DIR, ConfigError
@@ -448,3 +449,59 @@ def geometry_payload(ac: Aircraft) -> Dict[str, Any]:
             for d in ac.doors
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# The assigned-seat door split (ENGINE_SPEC 5)
+# ---------------------------------------------------------------------------
+#
+# Lives here, rather than in the engine that applies it, because the boarding
+# STRATEGIES need the same partition: a spatially-ordered strategy has to know
+# which door a passenger will walk to before it can order them far-end-first
+# relative to it. Two copies of this rule that drifted apart would put the
+# strategy's idea of a region and the engine's idea of a door out of step, and
+# the resulting queue would be wrong in a way no single-engine test could see.
+
+def split_boundaries(doors: Sequence["Door"]) -> List[float]:
+    """Midpoints between consecutive doors, sorted fore to aft."""
+    xs = sorted(d.x for d in doors)
+    return [(xs[i] + xs[i + 1]) * 0.5 for i in range(len(xs) - 1)]
+
+
+def door_for_x(doors_sorted: Sequence["Door"], bounds: Sequence[float], x: float) -> "Door":
+    return doors_sorted[bisect_left(bounds, x)]
+
+
+class SeatDoorSplit:
+    """Which boarding door serves a given seat, for ASSIGNED seating.
+
+    Open seating is deliberately not handled here: nobody has a seat yet, so the
+    split is a queue quota rather than a geometric partition (see
+    `engine.assign_doors`).
+    """
+
+    def __init__(self, doors: Sequence["Door"], assignment: str):
+        self.doors = list(doors)
+        self.single = len(self.doors) == 1 or assignment == "single"
+        self.assignment = assignment
+        self.by_x = sorted(self.doors, key=lambda d: d.x)
+        self.bounds = split_boundaries(self.by_x)
+        self.per_aisle: Dict[int, List["Door"]] = {}
+        for d in self.by_x:
+            self.per_aisle.setdefault(d.aisleIndex, []).append(d)
+        self._aisle_bounds = {
+            k: split_boundaries(v) for k, v in self.per_aisle.items() if len(v) > 1
+        }
+
+    def of_seat(self, seat: "Seat") -> "Door":
+        if self.single:
+            return self.doors[0]
+        if self.assignment == "split_by_row":
+            return door_for_x(self.by_x, self.bounds, seat.x)
+        # split_by_aisle: the door feeding your seat's aisle, ties broken by row.
+        cand = self.per_aisle.get(seat.aisleIndex)
+        if not cand:
+            return door_for_x(self.by_x, self.bounds, seat.x)
+        if len(cand) == 1:
+            return cand[0]
+        return door_for_x(cand, self._aisle_bounds[seat.aisleIndex], seat.x)

@@ -68,9 +68,23 @@ export function aircraftDefaultConfig(aircraft, defaults) {
   return out
 }
 
-/** The defaults as they stand for one airframe: base defaults, then its own. */
+/**
+ * The defaults as they stand for one airframe: base defaults, then its own.
+ *
+ * `doors` is part of that. It used to be inherited straight from the base
+ * defaults, which are the A320neo's — so a config naming another airframe and
+ * no doors started from `["1L","2L"]` and boarded an E175 through a door the
+ * E175 cannot board through. Every layering path (a shared link, a pasted
+ * config, a preset, Reset) goes through this function, so the airframe's own
+ * boarding doors belong here rather than at each call site.
+ */
 export function effectiveDefaults(defaults, aircraft) {
-  return { ...defaults, ...aircraftDefaultConfig(aircraft, defaults) }
+  const out = { ...defaults, ...aircraftDefaultConfig(aircraft, defaults) }
+  if (Object.prototype.hasOwnProperty.call(defaults || {}, 'doors')) {
+    const own = defaultDoorsFor(aircraft)
+    if (own.length) out.doors = own
+  }
+  return out
 }
 
 /**
@@ -99,11 +113,22 @@ export function airframeChanges(config, defaults, prevAircraft, nextAircraft) {
   return out
 }
 
-/** Door ids a freshly selected aircraft should board through. */
+/**
+ * Door ids a freshly selected aircraft should board through.
+ *
+ * Only BOARDING doors: `aircraft.doors` also lists service doors and overwing
+ * exits, and the engine rejects a run that names one of those. The A320neo's
+ * `2L` is a boarding door and the E175's is not, so "the default aircraft's
+ * defaults" is never a safe answer for another airframe — this is the function
+ * every layering path must go through.
+ */
 export function defaultDoorsFor(aircraft) {
-  if (!aircraft || !aircraft.doors || aircraft.doors.length === 0) return []
-  const on = aircraft.doors.filter((d) => d.defaultEnabled).map((d) => d.id)
-  return on.length ? on : [aircraft.doors[0].id]
+  const doors = aircraft?.doors
+  if (!Array.isArray(doors) || doors.length === 0) return []
+  const boardable = doors.filter((d) => d.boardable !== false)
+  if (boardable.length === 0) return []
+  const on = boardable.filter((d) => d.defaultEnabled).map((d) => d.id)
+  return on.length ? on : [boardable[0].id]
 }
 
 /**

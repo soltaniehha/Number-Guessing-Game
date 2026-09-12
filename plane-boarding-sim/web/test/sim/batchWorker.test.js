@@ -9,7 +9,7 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import { aggregateBatch } from '../../src/state/aggregate.js'
-import { STRATEGIES, runSimulation } from '../../src/sim/index.js'
+import { STRATEGIES, resolveAircraft, runSimulation, toSimConfig } from '../../src/sim/index.js'
 
 const posted = []
 globalThis.postMessage = (msg) => posted.push(msg)
@@ -60,32 +60,121 @@ describe('StrategyAccumulator', () => {
       expect(b.meanGateChecks).toEqual(a.meanGateChecks)
       expect(b.meanBinSearches).toEqual(a.meanBinSearches)
       expect(b.seatedCurveMean).toEqual(a.seatedCurveMean)
-      expect(b.congestionMean).toEqual(a.congestionMean)
-      expect(b.perPassengerPooled).toEqual(a.perPassengerPooled)
       expect(b.seatTimeMean).toEqual(a.seatTimeMean)
       expect(b.convergence).toEqual(a.convergence)
       expect(b.runs).toBe(a.runs)
+
+      // Both of these carry the same two corrections as the app-layer copy and
+      // must still agree with it exactly:
+      //   * `congestionMean` zero-pads the matrix to the LONGEST run instead of
+      //     cropping to the shortest, which used to discard the tail of every
+      //     longer replication -- the part where late jams form.
+      //   * `ci95` uses t(n-1) instead of a flat 1.96. Invisible in this pooled
+      //     statistic, which has n in the hundreds, but the two copies must not
+      //     compute the same quantity two different ways.
+      expect(b.congestionMean).toEqual(a.congestionMean)
+      expect(b.perPassengerPooled).toEqual(a.perPassengerPooled)
     }
-    expect(got.meta).toEqual(expected.meta)
+    // `sampleInterval` and `rowSlots` are scenario facts resolved from the
+    // CONFIG rather than folded out of the runs, so the worker fills them in and
+    // `aggregateBatch` -- which is handed runs, not a resolved SimConfig --
+    // leaves them undefined. Compared separately, below.
+    const sharedMeta = { ...got.meta }
+    const wantMeta = { ...expected.meta }
+    for (const k of ['sampleInterval', 'rowSlots']) {
+      delete sharedMeta[k]
+      delete wantMeta[k]
+    }
+    expect(sharedMeta).toEqual(wantMeta)
   })
 
-  it('truncates the congestion accumulator to the shortest run, as aggregate.js does', () => {
-    // Runs of different lengths produce different numbers of time buckets;
-    // the mean is taken over the columns every run has.
+  it('reports the scenario metadata the charts cannot derive from the runs', () => {
+    // `sampleInterval` -- the congestion matrix's column pitch. Charts derived
+    // it as `totalSeconds.mean / columns`, which is ~12% out because `columns`
+    // comes from the shortest run and `totalSeconds` is the mean run length.
+    //
+    // `rowSlots` -- the matrix is indexed by row SLOT, and labelling rows
+    // `slot + 1` is only right for an aircraft starting at row 1 that skips
+    // nothing. On b787_9, slot 30 is row 42.
+    const acc = new Map([['random', new StrategyAccumulator('random')]])
+    for (const r of runsFor('random', 2)) acc.get('random').add(r)
+    const meta = assemble(acc, STRATEGIES, CONFIG, 2, 2, true, null).meta
+    expect(meta.sampleInterval).toBe(toSimConfig(CONFIG).sampleInterval)
+    expect(meta.sampleInterval).toBeGreaterThan(0)
+
+    const ac = resolveAircraft(CONFIG.aircraftId)
+    expect(meta.rowSlots).toEqual(ac.rowSlots.map((r) => ({ slot: r.slot, number: r.number })))
+    expect(meta.rowSlots).toHaveLength(ac.rowSlots.length)
+
+    // And the row numbers are real row numbers, not slot + 1.
+    const b787 = resolveAircraft('b787_9')
+    const b787Meta = assemble(
+      new Map([['random', new StrategyAccumulator('random')]]),
+      STRATEGIES,
+      { ...CONFIG, aircraftId: 'b787_9' },
+      0,
+      0,
+      true,
+      null,
+    ).meta
+    expect(b787Meta.rowSlots.map((r) => r.number)).toEqual(b787.rowSlots.map((r) => r.number))
+    expect(b787Meta.rowSlots.some((r) => r.number !== r.slot + 1)).toBe(true)
+  })
+
+  it('degrades the metadata rather than failing on an unusable config', () => {
+    const meta = assemble(new Map(), STRATEGIES, { aircraftId: 'concorde' }, 0, 0, true, null).meta
+    expect(meta.sampleInterval).toBeNull()
+    expect(meta.rowSlots).toBeNull()
+  })
+
+  it('zero-pads the congestion accumulator to the longest run rather than cropping', () => {
+    // Runs of different lengths produce different numbers of time buckets. The
+    // accumulator used to size itself from the FIRST run and crop everything
+    // else to the shortest, so the tail of every longer replication -- the part
+    // where late jams form -- never entered the sum at all.
+    //
+    // A finished run has zero bodies in the aisle, so zero-padding is the
+    // unbiased mean over the full window, not a fudge.
     const runs = [...runsFor('random', 2), ...runsFor('back_to_front', 2, 99)]
     const acc = new StrategyAccumulator('mixed')
     for (const r of runs) acc.add(r)
-    const expected = aggregateBatch({
+
+    const colCounts = runs.map((r) => r.congestion[0].length)
+    const longest = Math.max(...colCounts)
+    const shortest = Math.min(...colCounts)
+    expect(longest).toBeGreaterThan(shortest) // the test is actually exercising it
+
+    const mean = acc.congestionMean()
+    expect(mean).toHaveLength(Math.max(...runs.map((r) => r.congestion.length)))
+    for (const row of mean) expect(row).toHaveLength(longest)
+
+    // Every cell is the plain mean over ALL runs, treating a finished run as 0.
+    const round2 = (v) => Math.round(v * 100) / 100
+    for (let r = 0; r < mean.length; r++) {
+      for (let c = 0; c < longest; c++) {
+        let sum = 0
+        for (const run of runs) sum += run.congestion[r]?.[c] ?? 0
+        expect(mean[r][c], `cell [${r}][${c}]`).toBe(round2(sum / runs.length))
+      }
+    }
+
+    // And the tail beyond the shortest run is genuinely carried, not truncated.
+    const tail = mean.map((row) => row.slice(shortest)).flat()
+    expect(tail.length).toBeGreaterThan(0)
+    expect(tail.some((v) => v > 0), 'the tail of the longer runs was discarded').toBe(true)
+
+    // ...and `aggregateBatch` now pads identically, so the two paths agree
+    // again. (They disagreed for exactly as long as it took the app-layer copy
+    // in `state/aggregate.js` to be fixed the same way.)
+    const fromFullRuns = aggregateBatch({
       byStrategy: { mixed: runs },
       names: {},
       config: CONFIG,
       done: 4,
       total: 4,
       complete: true,
-    }).byStrategy.mixed
-    expect(acc.congestionMean()).toEqual(expected.congestionMean)
-    const cols = new Set(runs.map((r) => r.congestion[0].length))
-    expect(cols.size).toBeGreaterThan(1) // the test is actually exercising it
+    }).byStrategy.mixed.congestionMean
+    expect(fromFullRuns).toEqual(mean)
   })
 
   it('keeps at most two whole runs as the documented sample', () => {
