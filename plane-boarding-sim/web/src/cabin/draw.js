@@ -305,19 +305,21 @@ function drawRowNumbers(ctx, geom, tokens) {
       cabinFirst.has(row.rowNumber) ||
       row.rowNumber % stride === 0
     if (!keep) continue
-    // A door chevron occupies the label lane, so step the number further out
-    // rather than dropping a row number altogether.
-    const v = nearDoor(geom, row.u, 1) ? offset + size * 1.5 : offset
+    // A door chevron and its queue lane occupy the label lane here, so step
+    // the number outside them rather than dropping a row number altogether.
+    const door = doorNear(geom, row.u, 1)
+    const v = door ? Math.abs(door.laneV) + size * 1.3 : offset
     ctx.fillText(String(row.rowNumber), sx(geom, row.u, v), sy(geom, row.u, v))
   }
 }
 
-function nearDoor(geom, u, side) {
+/** The door whose chevron would sit on top of a row label at `u`, if any. */
+function doorNear(geom, u, side) {
   for (const door of geom.doors) {
     if (door.side !== side) continue
-    if (Math.abs(door.u - u) < geom.halfV * 0.34) return true
+    if (Math.abs(door.u - u) < geom.halfV * 0.34) return door
   }
-  return false
+  return null
 }
 
 function drawSeatLetters(ctx, geom, tokens) {

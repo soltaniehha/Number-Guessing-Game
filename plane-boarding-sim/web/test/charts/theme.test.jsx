@@ -57,14 +57,14 @@ describe('theme tokens', () => {
   it('paints charts through CSS variables, so a theme flip needs no JS re-read', () => {
     const batch = makeBatch({ runs: 8 })
     const { container } = render(<SeatedCurve batch={batch} hidden={new Set()} />)
-    const light = container.querySelector('svg').innerHTML
+    const light = container.querySelector('svg[role="img"]').innerHTML
     act(() => {
       document.documentElement.setAttribute('data-theme', 'dark')
     })
-    const dark = container.querySelector('svg').innerHTML
+    const dark = container.querySelector('svg[role="img"]').innerHTML
     // identical markup: every colour is a token reference the browser resolves
     expect(dark).toBe(light)
     expect(light).toMatch(/var\(--series-1\)/)
-    expect(light).toMatch(/var\(--surface\)/)
+    expect(light).toMatch(/var\(--border\)/)
   })
 })

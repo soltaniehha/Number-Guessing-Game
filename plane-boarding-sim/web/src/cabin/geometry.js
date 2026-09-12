@@ -406,7 +406,9 @@ function assignQueueLaneLengths(doors, lengthPx, cabinEndPx) {
     }
     const aft = Math.max(0, aftLimit - door.u - 6)
     const fore = Math.max(0, door.u - foreLimit - 6)
-    door.laneDir = aft >= fore ? 1 : -1
+    // Queues normally trail aft of their door, which is how people read them.
+    // Only a door with little room behind it (airstairs at the back) flips.
+    door.laneDir = aft >= Math.min(cap * 0.6, fore) ? 1 : -1
     door.laneLength = Math.min(cap, door.laneDir === 1 ? aft : fore)
   }
 }

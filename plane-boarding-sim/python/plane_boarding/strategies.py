@@ -219,12 +219,22 @@ def strat_reverse_pyramid(pax: List[Passenger], ac: Aircraft, cfg: SimConfig, rn
         depth_term = (p.depth - 1) / n_depth
         return w_row * row_term + w_depth * depth_term
 
-    out = _shuffled(rng, pax)
-    out.sort(key=lambda p: -score(p))
-    # Five printable bands, so the result is announceable rather than a list of names.
-    total = len(out)
-    for i, p in enumerate(out):
-        p.groupLabel = f"Wave {min(5, 1 + (i * 5) // max(1, total))}"
+    ranked = _shuffled(rng, pax)
+    ranked.sort(key=lambda p: -score(p))
+
+    # QUANTISE. This is the difference between the real scheme and a naive one.
+    # A continuous score over 31 rows and 3 depths is dominated by the row term,
+    # so sorting on it strictly degenerates into a row-by-row rear sweep -- which
+    # measures *worse* than random, not better. America West called six diagonal
+    # groups off a boarding pass, and it is the coarseness that makes it work:
+    # within a group people spread along the aisle instead of queueing at one row.
+    n_groups = max(2, cfg.zoneCount + 2)
+    total = len(ranked)
+    out: List[Passenger] = []
+    for g in range(n_groups):
+        lo = total * g // n_groups
+        hi = total * (g + 1) // n_groups
+        out.extend(_label(_shuffled(rng, ranked[lo:hi]), f"Wave {g + 1}"))
     return out
 
 
