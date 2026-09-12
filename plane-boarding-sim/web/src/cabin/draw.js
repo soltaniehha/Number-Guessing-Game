@@ -17,7 +17,7 @@ import {
   stateToken,
   withAlpha,
 } from './tokens.js'
-import { SEAT_UNIT_M, fuselageHalfWidth } from './geometry.js'
+import { SEAT_UNIT_M, TAIL_TIP_FRACTION, fuselageHalfWidth } from './geometry.js'
 import { STATE, compressQueue } from './playback.js'
 
 const LABEL_FONT = '600 %spx ui-monospace, "SF Mono", Menlo, Consolas, monospace'
@@ -90,29 +90,49 @@ export function drawStaticLayer(ctx, geom, tokens, dpr) {
   ctx.setTransform(1, 0, 0, 1, 0, 0)
 }
 
+/**
+ * The fuselage outline, nose tip at `u = 0`.
+ *
+ * Traced clockwise from the radome: ogive nose, parallel tube through the
+ * cabin, tail cone tapering to a blunt tip. It must stay in step with
+ * `fuselageHalfWidth`, which is what anchors the doors and the tailplane to
+ * this same skin.
+ */
 function fuselagePath(ctx, geom) {
   const { noseEndU, tailStartU, lengthPx, halfV } = geom
-  const tipV = halfV * 0.1
-  ctx.beginPath()
-  ctx.moveTo(0, 0)
-  // Nose cone: ogive up to full width.
-  ctx.bezierCurveTo(noseEndU * 0.4, -halfV * 0.66, noseEndU * 0.74, -halfV, noseEndU, -halfV)
-  ctx.lineTo(tailStartU, -halfV)
-  // Tail: long taper to a blunt tip.
+  const noseLen = Math.max(1, noseEndU)
   const tailLen = Math.max(1, lengthPx - tailStartU)
+  const tipV = halfV * TAIL_TIP_FRACTION
+  // A radome is round, not sharp: start the ogive on a small blunt face.
+  const noseV = halfV * 0.05
+  ctx.beginPath()
+  ctx.moveTo(0, -noseV)
+  // Control points chosen to track `fuselageHalfWidth`'s `(1 - k^2)^0.62` to
+  // within ~2% of the half-width, so the skin the doors are pinned to is the
+  // skin that gets drawn. Convex all the way out: an ogive, not a wedge.
   ctx.bezierCurveTo(
-    tailStartU + tailLen * 0.42, -halfV * 0.99,
-    tailStartU + tailLen * 0.74, -halfV * 0.52,
+    noseLen * 0.06, -halfV * 0.52,
+    noseLen * 0.44, -halfV,
+    noseEndU, -halfV,
+  )
+  ctx.lineTo(tailStartU, -halfV)
+  ctx.bezierCurveTo(
+    tailStartU + tailLen * 0.40, -halfV,
+    tailStartU + tailLen * 0.72, -halfV * 0.46,
     lengthPx, -tipV,
   )
   ctx.lineTo(lengthPx, tipV)
   ctx.bezierCurveTo(
-    tailStartU + tailLen * 0.74, halfV * 0.52,
-    tailStartU + tailLen * 0.42, halfV * 0.99,
+    tailStartU + tailLen * 0.72, halfV * 0.46,
+    tailStartU + tailLen * 0.40, halfV,
     tailStartU, halfV,
   )
   ctx.lineTo(noseEndU, halfV)
-  ctx.bezierCurveTo(noseEndU * 0.74, halfV, noseEndU * 0.4, halfV * 0.66, 0, 0)
+  ctx.bezierCurveTo(
+    noseLen * 0.44, halfV,
+    noseLen * 0.06, halfV * 0.52,
+    0, noseV,
+  )
   ctx.closePath()
 }
 
@@ -135,9 +155,17 @@ function drawWings(ctx, geom, tokens) {
 
   // The cabin is drawn with the lateral axis exaggerated, so a wing sized off
   // the fuselage half-width would come out stubby and swept the wrong way.
-  // Size the chord off the span instead: it keeps the planform believable.
+  // Size the chord off the span instead: it keeps the planform believable --
+  // and off the whole aeroplane too, so it does not shrink to a fin now that
+  // the nose and the tail cone are in the picture. A real root chord is about
+  // a seventh of the overall length.
   const exitMid = (exitU0 + exitU1) / 2
-  const rootChord = Math.max(halfV * 0.42, wingSpan * 1.15, (exitU1 - exitU0) + halfV * 0.2)
+  const rootChord = Math.max(
+    halfV * 0.42,
+    wingSpan * 1.15,
+    lengthPx * 0.13,
+    (exitU1 - exitU0) + halfV * 0.2,
+  )
   const rootFore = exitMid - rootChord * 0.42
   const rootAft = rootFore + rootChord
   const tipFore = rootFore + wingSpan * 0.95
@@ -165,15 +193,23 @@ function drawWings(ctx, geom, tokens) {
     ctx.fill()
     ctx.stroke()
 
-    // Horizontal stabiliser, rooted on the tapering tail skin.
-    const stabRoot = tailStartU + (lengthPx - tailStartU) * 0.42
+    // Tailplane, rooted on the tapering tail skin.
+    //
+    // The tip has to be measured OUT from the skin, not from a fraction of it.
+    // Taking `skin * 0.6 + span` was fine while the tail was a 0.4 m stub --
+    // the root was down near the tip where the skin is thin -- but on a real
+    // tail cone the root sits at ~0.77 of the half-width, and `0.6 * 0.77 +
+    // 0.62` lands within a pixel or two of the root itself: both tailplanes
+    // collapsed into hairline scratches on the skin.
+    const tailLen = Math.max(1, lengthPx - tailStartU)
+    const stabRoot = tailStartU + tailLen * 0.46
     const skin = fuselageHalfWidth(geom, stabRoot) || halfV * 0.6
-    const stabSpan = wingSpan * 0.62
-    const stabChord = rootChord * 0.6
+    const stabSpan = wingSpan * 0.66
+    const stabChord = Math.min(rootChord * 0.62, tailLen * 0.42)
     ctx.beginPath()
     ctx.moveTo(stabRoot, sign * skin * 0.92)
-    ctx.lineTo(stabRoot + stabSpan * 0.95, sign * (skin * 0.6 + stabSpan))
-    ctx.lineTo(stabRoot + stabSpan * 0.95 + stabChord * 0.45, sign * (skin * 0.6 + stabSpan))
+    ctx.lineTo(stabRoot + stabSpan * 0.85, sign * (skin + stabSpan))
+    ctx.lineTo(stabRoot + stabSpan * 0.85 + stabChord * 0.42, sign * (skin + stabSpan))
     ctx.lineTo(stabRoot + stabChord, sign * skin * 0.92)
     ctx.closePath()
     ctx.fillStyle = fill
@@ -545,8 +581,8 @@ function paintPassengers(ctx, geom, tokens, frame, scratch, n) {
       if (frame.state[i] !== STATE.WALKING) continue
       const lane = Math.min(lanes - 1, Math.max(0, pax[i].lane | 0))
       const v = geom.laneV[lane]
-      const u0 = trail[i] * geom.scaleLon
-      const u1 = frame.x[i] * geom.scaleLon
+      const u0 = geom.planU(trail[i])
+      const u1 = geom.planU(frame.x[i])
       if (Math.abs(u1 - u0) < 0.6) continue
       ctx.moveTo(u0, v)
       ctx.lineTo(u1, v)
@@ -572,7 +608,7 @@ function paintPassengers(ctx, geom, tokens, frame, scratch, n) {
       v = geom.seatV[seatIdx]
     } else {
       const lane = Math.min(lanes - 1, Math.max(0, pax[i].lane | 0))
-      u = frame.x[i] * geom.scaleLon
+      u = geom.planU(frame.x[i])
       v = geom.laneV[lane]
     }
 
@@ -671,20 +707,22 @@ function paintQueues(ctx, geom, tokens, frame, scratch) {
 
 /** Keep the pill's whole box on the canvas, never half of it. */
 const BADGE_MARGIN = 2
-const clamp = (v, lo, hi) => (hi < lo ? (lo + hi) / 2 : Math.min(Math.max(v, lo), hi))
 
 /**
  * The live count on each active queue (UI_SPEC 1.1).
  *
- * The pill wants to sit just ahead of the head of the queue, at the door. A
- * FORWARD door has nothing ahead of it: `1L` resolves to u ≈ 0 on every
- * airframe in the roster — negative, in fact, since the door is half a pitch
- * forward of row 1 — so "one pill-width further forward" put the badge off the
- * left-hand edge of the canvas and the busiest queue on the aeroplane rendered
- * as eighty red dots with no number against them. When the head end has no
- * room the pill goes to the TAIL of the queue instead, which is empty by
- * construction, and whatever happens the box is finally clamped into the
- * canvas so a count is always readable.
+ * The pill sits just ahead of the head of the queue, at the door, and falls
+ * back to the TAIL of the queue — empty by construction — when the head end
+ * has no room: a squat viewport can leave a rear door with a pill-width of
+ * nothing behind it.
+ *
+ * It used to need a hard clamp into the canvas on top of that, because a
+ * forward door landed at u <= 0 and "one pill-width further forward" was off
+ * the left-hand edge: the busiest queue on the aeroplane drew eighty red dots
+ * with no number against them. That was the plan-space datum being wrong, not
+ * the pill, and `buildCabinModel` now puts a nose ahead of row 1 — so the
+ * clamp is gone, and `test/cabin/roster.test.js` holds every count on the
+ * canvas, on every airframe and every viewport, without one.
  */
 function paintQueueBadges(ctx, geom, tokens, scratch) {
   const size = geom.queueBadgeSize
@@ -706,8 +744,8 @@ function paintQueueBadges(ctx, geom, tokens, scratch) {
       const tail = scratch.queueTail ? scratch.queueTail[d] : door.laneLength
       u = door.u + dir * ((tail || 0) + w / 2 + size * 0.5)
     }
-    const x = clamp(sx(geom, u, door.laneV), w / 2 + BADGE_MARGIN, geom.width - w / 2 - BADGE_MARGIN)
-    const y = clamp(sy(geom, u, door.laneV), h / 2 + BADGE_MARGIN, geom.height - h / 2 - BADGE_MARGIN)
+    const x = sx(geom, u, door.laneV)
+    const y = sy(geom, u, door.laneV)
 
     roundRectPath(ctx, x - w / 2, y - h / 2, w, h, h / 2)
     ctx.fillStyle = tokens[stateToken(STATE.QUEUED)]

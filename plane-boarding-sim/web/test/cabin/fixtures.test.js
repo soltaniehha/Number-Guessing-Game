@@ -30,6 +30,28 @@ describe('aircraft fixtures', () => {
     expect(new Set(a.seats.map((s) => s.lane))).toEqual(new Set([0, 1]))
   })
 
+  /**
+   * The fixtures used to leave 6.2 m of nose in front of row 1 and bolt a
+   * 9-13 m tail onto `lengthM`. Neither exists in `geometryPayload`, and the
+   * pair of them hid the defect these tests are meant to catch: a forward
+   * door, which the real payload puts at a NEGATIVE x, sat comfortably inside
+   * the canvas here and off its leading edge in the app.
+   */
+  it('measures x from row 1 and reports the CABIN as lengthM, like the payload', () => {
+    for (const build of Object.values(AIRCRAFT_BUILDERS)) {
+      const a = build()
+      const rows = a.rowSlots
+      const last = rows[rows.length - 1]
+      expect(rows[0].x, `${a.id}: row 1 is the datum`).toBe(0)
+      // `aircraft.js`: length = the x cursor after the last row.
+      expect(a.lengthM, `${a.id}: lengthM is the cabin`).toBeCloseTo(last.x + last.pitchM, 4)
+      // ...so there is no nose in it, and no tail cone either.
+      expect(a.lengthM).toBeLessThan(last.x + last.pitchM * 1.5)
+      const forward = a.doors.slice().sort((x, y) => x.x - y.x)[0]
+      expect(forward.x, `${a.id}: the forward door is ahead of row 1`).toBeLessThan(0)
+    }
+  })
+
   it('rows ascend monotonically in x, which the heat accumulator relies on', () => {
     for (const build of Object.values(AIRCRAFT_BUILDERS)) {
       const rows = build().rowSlots
@@ -79,7 +101,7 @@ describe('makeReplay', () => {
     for (const p of r.passengers) {
       expect(typeof p.seatRow).toBe('number')
       expect(typeof p.seatLetter).toBe('string')
-      expect(p.seatX).toBeGreaterThan(0)
+      expect(p.seatX).toBeGreaterThanOrEqual(0) // row 1 sits on the datum
       expect(p.seatDepth).toBeGreaterThanOrEqual(1)
       expect(p.lane).toBeGreaterThanOrEqual(0)
       expect(p.bags).toBeGreaterThanOrEqual(0)

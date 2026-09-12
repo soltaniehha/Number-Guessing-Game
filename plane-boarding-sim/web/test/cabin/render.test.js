@@ -331,16 +331,20 @@ function paintFrame(kind, viewport, options) {
 describe('jet-bridge queue counts', () => {
   /**
    * The roster measures x from ROW 1, so a forward door — half a pitch ahead of
-   * it — sits at a negative x, i.e. at u ≈ 0 or just left of it. The badge used
-   * to be parked a further `size * 1.9` forward of the door, which put it off
-   * the left-hand edge of the canvas: the forward door drew ~80 red dots and no
-   * number at all, on every airframe in the roster.
+   * it — sits at a NEGATIVE x. That used to become a negative plan u, and the
+   * badge, parked a further `size * 1.9` forward of the door, went off the
+   * left-hand edge of the canvas: the forward door drew ~80 red dots and no
+   * number at all, on every airframe in the roster. `buildCabinModel` now puts
+   * a nose ahead of row 1, so the door has real aeroplane in front of it and
+   * the badge needs no clamping to stay on the canvas.
    */
   for (const [name, viewport] of VIEWPORTS) {
-    it(`keeps every count on the canvas with a door at u=0 (${name})`, () => {
+    it(`keeps every count on the canvas with a door ahead of row 1 (${name})`, () => {
       const { ctx, geom, scratch } = paintFrame('split', viewport)
       const forward = geom.doors.find((d) => d.id === '1L')
-      expect(forward.u).toBeLessThanOrEqual(0) // the case that used to break
+      const aircraft = geom.aircraft.doors.find((d) => d.id === '1L')
+      expect(aircraft.x).toBeLessThan(0) // the case that used to break
+      expect(forward.u).toBeGreaterThan(geom.noseEndU) // ...now on full skin
       const queued = [...scratch.queueCount].filter((n) => n > 0).length
       expect(queued).toBeGreaterThanOrEqual(2) // a forward AND an aft door
       const boxes = badgeBoxes(ctx, geom)

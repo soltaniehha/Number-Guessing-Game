@@ -47,7 +47,7 @@ function pickWeighted(rnd, entries) {
 
 const INCH = 0.0254
 const BODY_DEPTH = 0.4
-const NOSE_M = 6.2
+const DEFAULT_PITCH_M = 0.79
 
 // ---------------------------------------------------------------------------
 // Aircraft builders
@@ -55,29 +55,42 @@ const NOSE_M = 6.2
 
 /**
  * Assemble an Aircraft from a compact cabin description.
- * @param {object} spec
+ *
+ * The layout arithmetic is `sim/aircraft.js`'s, deliberately, because these
+ * fixtures stand in for `geometryPayload` and a fixture that is easier to draw
+ * than the real payload is worth nothing:
+ *
+ *  - x is measured in metres from ROW 1, which therefore sits at x = 0;
+ *  - a row's x is its leading edge, and the next row is one pitch aft;
+ *  - a galley between two cabins is real aisle metres, added like a monument;
+ *  - `lengthM` is the CABIN -- last row plus its pitch. There is no nose and
+ *    no tail in it, because the engine has no use for either.
+ *
+ * That last pair is the trap this file used to set. It parked row 1 6.2 m aft
+ * of the datum and added a 9-13 m tail, so a forward door -- which the real
+ * payload puts half a pitch AHEAD of row 1, at a negative x -- landed
+ * comfortably inside the canvas here and off its leading edge in the app. The
+ * cabin renderer's nose and tail allowance is now the renderer's own business
+ * (`buildCabinModel`), and these fixtures reproduce the payload instead of
+ * compensating for it.
  */
 function buildAircraft(spec) {
   const rowSlots = []
   const seats = []
   const cabins = []
-  // `noseM` is where row 1 sits behind the nose datum. The real roster puts it
-  // at ZERO -- `parity/aircraft.json` measures x from row 1, so a forward door
-  // half a pitch ahead of it lands on a NEGATIVE x. Fixtures that always leave
-  // 6.2 m of nose in front never reproduce that, which is how the forward
-  // door's queue badge came to be painted off the canvas unnoticed.
-  let x = spec.noseM ?? NOSE_M
+  let x = 0
 
-  for (const cabin of spec.cabins) {
+  for (let c = 0; c < spec.cabins.length; c++) {
+    const cabin = spec.cabins[c]
     cabins.push({
       id: cabin.id,
       name: cabin.name,
       classKey: cabin.classKey,
       layout: cabin.layout,
     })
+    if (c > 0) x += spec.dividerM ?? 1.7 // galley / lavatory block
     const pitchM = cabin.pitchIn * INCH
     for (const rowNumber of cabin.rows) {
-      x += pitchM / 2
       rowSlots.push({
         rowNumber,
         x: round4(x),
@@ -101,18 +114,19 @@ function buildAircraft(spec) {
           cabinId: cabin.id,
         })
       }
-      x += pitchM / 2
+      x += pitchM
     }
-    x += spec.dividerM ?? 1.7 // galley / lavatory block between cabins
   }
 
-  const cabinEnd = x
+  const last = rowSlots[rowSlots.length - 1]
   const doors = spec.doors.map((door) => ({
     id: door.id,
     name: door.name,
+    // Exactly `aircraft.js`: half a pitch ahead of the row it serves, or half
+    // a pitch aft of the last row when it serves none.
     x: door.atRow === null
-      ? round4(cabinEnd + 0.4)
-      : round4(rowX(rowSlots, door.atRow) - rowPitch(rowSlots, door.atRow) / 2 - 0.35),
+      ? round4(last.x + last.pitchM / 2)
+      : round4(rowX(rowSlots, door.atRow) - rowPitch(rowSlots, door.atRow) / 2),
     aisleIndex: door.aisleIndex,
     kind: door.kind,
     enabled: door.enabled,
@@ -126,17 +140,17 @@ function buildAircraft(spec) {
     seats,
     cabins,
     doors,
-    lengthM: round4(cabinEnd + spec.tailM),
+    lengthM: round4(last.x + last.pitchM),
   }
 }
 
 function rowX(rowSlots, rowNumber) {
   const row = rowSlots.find((r) => r.rowNumber === rowNumber)
-  return row ? row.x : NOSE_M
+  return row ? row.x : 0
 }
 function rowPitch(rowSlots, rowNumber) {
   const row = rowSlots.find((r) => r.rowNumber === rowNumber)
-  return row ? row.pitchM : 0.79
+  return row ? row.pitchM : DEFAULT_PITCH_M
 }
 function round4(n) {
   return Math.round(n * 10000) / 10000
@@ -179,7 +193,6 @@ export function makeSingleAisleAircraft() {
     id: 'a320neo',
     name: 'A320neo (3-3, 180 seats)',
     aisleCount: 1,
-    tailM: 9.4,
     cabins: [
       {
         id: 'first',
@@ -214,7 +227,6 @@ export function makeTwinAisleAircraft() {
     id: 'b77w',
     name: '777-300ER (3-4-3, 324 seats)',
     aisleCount: 2,
-    tailM: 13.5,
     cabins: [
       {
         id: 'business',
@@ -253,13 +265,11 @@ export function makeTwinAisleAircraft() {
 /**
  * 3-3-3 twin aisle laid out like the roster's 787-9: FOUR cabins, of which two
  * are economy — a short forward section and a long aft one, physically split
- * by a galley complex — and a forward door on the roster's own datum, i.e. at
- * a negative x, half a pitch ahead of row 1.
+ * by a galley complex.
  *
- * Both of those are things the other two fixtures cannot express, and both hid
- * a real defect: the legend deduped economy down to one chip and dropped the
- * biggest cabin on the aeroplane, and the forward door's queue count was drawn
- * off the left-hand edge of the canvas.
+ * That is something the other two fixtures cannot express, and it hid a real
+ * defect: the legend deduped economy down to one chip and dropped the biggest
+ * cabin on the aeroplane.
  */
 export function makeSplitEconomyAircraft() {
   const aft = []
@@ -268,8 +278,6 @@ export function makeSplitEconomyAircraft() {
     id: 'b787_9',
     name: '787-9 (3-3-3, split economy)',
     aisleCount: 2,
-    tailM: 11.5,
-    noseM: 0,
     cabins: [
       {
         id: 'polaris',

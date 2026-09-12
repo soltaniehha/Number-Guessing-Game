@@ -76,9 +76,39 @@ describe('buildCabinModel', () => {
     expect(model.halfWidthM * 2).toBeGreaterThan(3.4)
     expect(model.halfWidthM * 2).toBeLessThan(4.2)
     expect(model.aisleUnits).toEqual([0])
-    expect(model.cabinStartM).toBeGreaterThan(0)
+    // Row 1 is the engine's datum, so the cabin starts half a pitch AHEAD of
+    // it -- exactly where the forward door is.
+    expect(model.cabinStartM).toBeLessThan(0)
     expect(model.cabinEndM).toBeGreaterThan(model.cabinStartM)
-    expect(model.lengthM).toBeGreaterThan(model.cabinEndM)
+    // The drawn aeroplane is the cabin plus a nose and a tail cone, and the
+    // tail is the longer of the two.
+    expect(model.noseM).toBeCloseTo(model.halfWidthM * 3.4, 9)
+    expect(model.tailM).toBeCloseTo(model.halfWidthM * 5.4, 9)
+    expect(model.originM).toBeCloseTo(model.cabinStartM - model.noseM, 9)
+    expect(model.lengthM).toBeCloseTo(model.noseM + model.cabinLengthM + model.tailM, 9)
+    expect(model.lengthM).toBeGreaterThan(model.cabinLengthM)
+  })
+
+  it('treats a galley aft of the last row as cabin, not as aeroplane', () => {
+    // `aircraft.lengthM` is the CABIN. Where it runs past the last row the
+    // parallel section has to follow it, or an aft door ends up hanging off
+    // the tail cone.
+    const stretched = { ...SINGLE, lengthM: SINGLE.lengthM + 3 }
+    const model = buildCabinModel(stretched)
+    expect(model.cabinEndM).toBeCloseTo(SINGLE.lengthM + 3, 9)
+    expect(model.tailM).toBeCloseTo(buildCabinModel(SINGLE).tailM, 9)
+  })
+
+  it('gives a stub of an aircraft a proportionate nose rather than a huge one', () => {
+    const twoRows = {
+      ...SINGLE,
+      rowSlots: SINGLE.rowSlots.slice(0, 2),
+      seats: SINGLE.seats.filter((s) => s.rowNumber <= 2),
+      lengthM: SINGLE.rowSlots[1].x + SINGLE.rowSlots[1].pitchM,
+    }
+    const model = buildCabinModel(twoRows)
+    expect(model.noseM).toBeLessThanOrEqual(model.cabinLengthM * 0.55 + 1e-9)
+    expect(model.lengthM).toBeGreaterThan(model.cabinLengthM)
   })
 
   it('produces a believable twin-aisle cross-section', () => {
@@ -128,6 +158,22 @@ describe('computeGeometry', () => {
     expect(v.toScreen(100, 20)).toEqual({ x: v.originX + 20, y: v.originY + 100 })
     // Nose is at the top when vertical: increasing u goes down the screen.
     expect(v.toScreen(200, 0).y).toBeGreaterThan(v.toScreen(0, 0).y)
+  })
+
+  it('shifts engine x aft by the nose, so a forward door lands on the canvas', () => {
+    const geom = computeGeometry(SINGLE, VIEW)
+    expect(geom.uOffset).toBeCloseTo(-geom.model.originM * geom.scaleLon, 9)
+    expect(geom.planU(geom.model.originM)).toBeCloseTo(0, 9) // the nose tip
+    expect(geom.planU(geom.model.cabinStartM)).toBeCloseTo(geom.cabinU0, 9)
+    // Row 1 is a nose plus half a pitch aft of the tip.
+    expect(geom.planU(0)).toBeCloseTo(geom.cabinU0 + geom.rows[0].pitchPx / 2, 9)
+    // Door 1L is at a negative engine x and a comfortably positive plan u.
+    const forward = SINGLE.doors.slice().sort((a, b) => a.x - b.x)[0]
+    expect(forward.x).toBeLessThan(0)
+    expect(geom.doors.find((d) => d.id === forward.id).u).toBeGreaterThan(geom.noseEndU)
+    // Rows, seats and doors all go through the same shift.
+    expect(geom.rows[0].u).toBeCloseTo(geom.planU(SINGLE.rowSlots[0].x), 9)
+    expect(geom.seatU[0]).toBeCloseTo(geom.planU(SINGLE.seats[0].x), 4)
   })
 
   it('round-trips screen coordinates back to plan space in both orientations', () => {
@@ -185,12 +231,26 @@ describe('fuselageHalfWidth', () => {
 
   it('widens monotonically through the nose', () => {
     const geom = computeGeometry(SINGLE, VIEW)
+    expect(geom.noseEndU).toBeGreaterThan(0)
     let previous = -1
     for (let u = 0; u < geom.noseEndU; u += geom.noseEndU / 40) {
       const h = fuselageHalfWidth(geom, u)
       expect(h).toBeGreaterThanOrEqual(previous)
       previous = h
     }
+  })
+
+  it('narrows monotonically down a tail cone that is longer than the nose', () => {
+    const geom = computeGeometry(SINGLE, VIEW)
+    const tailLen = geom.lengthPx - geom.tailStartU
+    expect(tailLen).toBeGreaterThan(geom.noseEndU) // a cone, not the old stub
+    let previous = Infinity
+    for (let k = 0; k <= 1; k += 1 / 40) {
+      const h = fuselageHalfWidth(geom, geom.tailStartU + tailLen * k * 0.999)
+      expect(h).toBeLessThanOrEqual(previous + 1e-9)
+      previous = h
+    }
+    expect(previous).toBeLessThan(geom.halfV * 0.2) // tapered to a blunt tip
   })
 })
 
@@ -205,8 +265,9 @@ describe('mapPassengersToSeats', () => {
         const seat = replay.aircraft.seats[index[i]]
         expect(seat.rowNumber).toBe(replay.passengers[i].seatRow)
         expect(seat.letter).toBe(replay.passengers[i].seatLetter)
-        // The dot must land on the seat, not merely in the right row.
-        expect(geom.seatU[index[i]]).toBeCloseTo(replay.passengers[i].seatX * geom.scaleLon, 3)
+        // The dot must land on the seat, not merely in the right row -- in
+        // PLAN space, which is the engine's x shifted aft by the nose.
+        expect(geom.seatU[index[i]]).toBeCloseTo(geom.planU(replay.passengers[i].seatX), 3)
       }
     }
   })
